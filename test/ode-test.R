@@ -1,43 +1,118 @@
 ## read in the data
-setwd("~/Documents/clients/ted")
-files <- within(expand.grid(sex=1:2,type=c("Never","Former","Current")),
-                { filename <- sprintf("all_final_results_%s%s.csv",type,sex) })
-mort <- do.call("rbind",
-                   lapply(1:nrow(files),function(i) {
-                       data <- read.csv(files$filename[i])
-                       data$sex <- files$sex[i]
-                       data$smkstat <- switch(as.character(files$type[i]),
-                                              Never=1,Current=2,Former=3)
-                       data
-                   }))
-mort <- transform(mort, cohort=year-age)
-require(foreign)
-smoking <- within(read.dta("cisnet_apc_mar19_agg.dta"),
-                  { cohort <- year-age })
-## recall: 0=current status, 1=recall, 2=age quit only
-##
-cohorts <- unique(subset(smoking,cohort>=1890,select=c(sex,cohort)))
-smokingList <-
-    lapply(1:nrow(cohorts), function(i) {
-        .sex <- cohorts$sex[i]
-        .cohort <- cohorts$cohort[i]
-        list(sex=.sex,
-             cohort=.cohort,
-             data=subset(smoking,cohort==.cohort & sex==.sex),
-             Never=subset(mort,cohort==.cohort & sex==.sex & smkstat == 1)$final,
-             Current=subset(mort,cohort==.cohort & sex==.sex & smkstat == 2)$final,
-             Former=subset(mort,cohort==.cohort & sex==.sex & smkstat == 3)$final)
-    })
-##
-## cohorts <- unique(subset(mort,cohort>=1890 & cohort<=1994,select=c(sex,cohort,smkstat)))
-## mortList <-
-##     lapply(1:nrow(cohorts), function(i) {
-##         .sex <- cohorts$sex[i]
-##         .cohort <- cohorts$cohort[i]
-##         .smkstat <- cohorts$smkstat[i]
-##         list(sex=.sex,cohort=.cohort,smkstat=.smkstat,
-##              data=subset(mort,cohort==.cohort & sex==.sex & smkstat == .smkstat))
-##     })
+if (doOnce <- FALSE) {
+    setwd("~/Documents/clients/ted")
+    files <- within(expand.grid(sex=1:2,type=c("Never","Former","Current")),
+                    { filename <- sprintf("all_final_results_%s%s.csv",type,sex) })
+    mort <- do.call("rbind",
+                    lapply(1:nrow(files),function(i) {
+                        data <- read.csv(files$filename[i])
+                        data$sex <- files$sex[i]
+                        data$smkstat <- switch(as.character(files$type[i]),
+                                               Never=1,Current=2,Former=3)
+                        data
+                    }))
+    mort <- transform(transform(mort, cohort=year),year=cohort+age)
+    require(foreign)
+    smoking <- within(read.dta("cisnet_apc_mar19_agg.dta"),
+                      { cohort <- year-age })
+    ## recall: 0=current status, 1=recall, 2=age quit only
+    ##
+    cohorts <- unique(subset(smoking,cohort>=1890,select=c(sex,cohort)))
+    smokingList <-
+        lapply(1:nrow(cohorts), function(i) {
+            .sex <- cohorts$sex[i]
+            .cohort <- cohorts$cohort[i]
+            list(sex=.sex,
+                 cohort=.cohort,
+                 smoking=subset(smoking,cohort==.cohort & sex==.sex),
+                 mort=data.frame(age=subset(mort,cohort==.cohort & sex==.sex & smkstat == 1)$age,
+                 Never=subset(mort,cohort==.cohort & sex==.sex & smkstat == 1)$final,
+                 Current=subset(mort,cohort==.cohort & sex==.sex & smkstat == 2)$final,
+                 Former=subset(mort,cohort==.cohort & sex==.sex & smkstat == 3)$final))
+        })
+    cohorts <- unique(subset(mort,cohort>=1890,select=c(sex,cohort)))
+    mortList <-
+        lapply(1:nrow(cohorts), function(i) {
+            .sex <- cohorts$sex[i]
+            .cohort <- cohorts$cohort[i]
+            list(sex=.sex,cohort=.cohort,
+                 data.frame(age=subset(mort,cohort==.cohort & sex==.sex & smkstat == 1)$age,
+                 Never=subset(mort,cohort==.cohort & sex==.sex & smkstat == 1)$final,
+                 Current=subset(mort,cohort==.cohort & sex==.sex & smkstat == 2)$final,
+                 Former=subset(mort,cohort==.cohort & sex==.sex & smkstat == 3)$final))
+        })
+    save(smokingList,mortList,file="smokingList-20140528.RData")
+}
+
+load(file="~/Documents/clients/ted/smokingList-20140528.RData")
+require(purged)
+test <- smokingList[[1]]
+smoking <- test$smoking
+mort <- test$mort
+objective <- function(beta) {
+    int01 <- beta[i <- 1]
+    int12 <- beta[i <- i+1]
+    beta01 <- beta[(i+1):(i <- i+2)]
+    beta12 <- beta[(i+1):(i <- i+2)]
+    beta20 <- beta[i <- i+1]
+    print(beta)
+    .Call("gsl_main2Reclassified",
+          smoking$smkstat - 1, 
+          as.integer(smoking$recall),
+          smoking$agestart,
+          smoking$agequit,
+          smoking$age, # age observed
+          smoking$freq, # frequency (as double)
+          int01,
+          int12,
+          c(10,20,30), # knots01
+          c(20,40,60), # knots12
+          beta01,
+          beta12,
+          beta20,
+          mort$age,
+          mort$Never,
+          mort$Current,
+          mort$Former,
+          FALSE, # debug
+          package="purged")
+}
+##objective(init <- c(-3,-4,1,-1,1,-1,log(0.01)))
+system.time(print(objective(init <- c(-3,-4,1,-1,1,-1,log(0.01)))))
+
+init <- c(-2.3633004, -3.7141737,  4.4504238, -0.1386734, -0.3805543, -0.4052293, log(0.01))
+options(width=120)
+optim1 <- optim(init,objective,control=list(trace=2)) # SLOW
+optim1Hess <- optimHess(optim1$par,objective)
+
+
+## How to look at the estimated rates?
+require(splines)
+display <- function(fit) {
+    beta <- fit$par
+    int01 <- beta[i <- 1]
+    int12 <- beta[i <- i+1]
+    beta01 <- beta[(i+1):(i <- i+2)]
+    beta12 <- beta[(i+1):(i <- i+2)]
+    beta20 <- beta[i <- i+1]
+    knots01 <- c(10,20,30)
+    knots12 <- c(20,40,60)
+    nsfun <- function(knots,centre=knots[1],intercept=0) {
+        nsobj <- ns(knots,df=length(knots)-1)
+        nsref <- predict(nsobj,centre)
+        fun <- function(t,beta) apply(predict(nsobj,t),1,
+                                      function(row) exp(intercept+sum((row-nsref) * beta)))
+        fun
+    }
+    alpha01 <- nsfun(knots01,centre=20,intercept=int01)
+    alpha12 <- nsfun(knots12,centre=40,intercept=int12)
+    ages=seq(0,100,length=301)
+    plot(ages,alpha01(ages,beta01),type="l")
+    plot(ages,alpha12(ages,beta12),type="l")
+}
+par(mfrow=c(1,2))
+display(optim1)
+
 
 ## Reimplement the example in R
 require(splines)
@@ -73,75 +148,9 @@ nsfun <- function(knots,centre=knots[1],intercept=0) {
 }
 alpha01 <- nsfun(c(10,20,30),centre=20,intercept=-3)
 alpha12 <- nsfun(c(20,40,60),centre=40,intercept=-4)
-plot(10:30,alpha01(10:30,c(1,-1)))
-plot(10:80,alpha12(10:80,c(1,-1)))
+##plot(10:30,alpha01(10:30,c(1,-1)))
+##plot(10:80,alpha12(10:80,c(1,-1)))
 bounds <- function(t,lower,upper) pmax(pmin(t,upper),lower)
-parms <- c(beta20=log(0.01),beta01=c(1,-1),beta12=c(1,-1)) # GLOBAL
-Never <- 1; Current <- 2; Former <- 3; Death <- 4
-odefunc <- function(t,y,parms) {
-    a20 <- exp(parms["beta20"])
-    a01 <- alpha01(t,c(parms["beta011"],parms["beta012"]))
-    a12 <- alpha12(t,c(parms["beta121"],parms["beta122"]))
-    m0 <- mu0(bounds(t,0.5,105.5))
-    m1 <- mu1(bounds(t,0.5,105.5))
-    m2 <- mu2(bounds(t,0.5,105.5))
-    list(c(-y[Never]*(m0+a01)+y[Former]*a20,
-           -y[Current]*(m1+a12)+y[Never]*a01,
-           -y[Former]*(m2+a20)+y[Current]*a12),
-         c(a01=a01,a12=a12,a20=a20,m0=m0,m1=m1,m2=m2))
-}     
-muij <- function(i,j,t,parms) {
-    if (i==Never & j==Current) return(alpha01(t,c(parms["beta011"],parms["beta012"])))
-    if (i==Current & j==Former) return(alpha12(t,c(parms["beta121"],parms["beta122"])))
-    if (i==Former & j==Never) return(exp(parms["beta20"]))
-    if (j==Death) {
-        if (i==Never) return(mu0(bounds(t,0.5,105.5)))
-        if (i==Current) return(mu1(bounds(t,0.5,105.5)))
-        if (i==Former) return(mu2(bounds(t,0.5,105.5)))
-    }
-    return(0)
-    }
-Pij <- function(i,j,t0,t1,parms,size=3) {
-    y <- rep(0,size)
-    y[i] <- 1
-    ode(y=y, t=c(t0,t1), func = odefunc, parms,
-            rtol=1e-8, atol=1e-8)[2,i+1]
-}
-PiK <- function(i,t0,t1,parms,size=3) {
-    y <- rep(0,size)
-    y[i] <- 1
-    sum(ode(y=y, t=c(t0,t1), func = odefunc, parms,
-            rtol=1e-8, atol=1e-8)[2,2:(size+1)])
-}
-ll <- function(finalState,s,t,u) {
-    if(finalState==Never) return(log(Pij(Never,Never,0,u,parms)/PiK(Never,0,u,parms)))
-    if(finalState==Current)
-        return(log(Pij(Never,Never,0,s,parms)*muij(Never,Current,s,parms)*
-                   Pij(Current,Current,s,u,parms)/PiK(Never,0,u,parms)))
-    if(finalState==Former)
-        return(log(Pij(Never,Never,0,s,parms)*muij(Never,Current,s,parms)*
-                   Pij(Current,Current,s,t,parms)*muij(Current,Former,t,parms)*
-                   Pij(Former,Former,t,u,parms)/PiK(Never,0,u,parms)))
-}
-ll(Never,u=70)
-ll(Current,20,u=70)
-ll(Former,20,50,u=70)
-
-## scratchpad
-ts <- seq(0,100,by=10)
-Pij(Never,Never,0,10,parms)
-PiK(Never,0,10,parms)
-##
-ode1 <- ode(y=c(Never=1,Current=0,Former=0), t=ts, func = odefunc, parms=parms,
-            rtol=1e-8, atol=1e-8)
-with(data.frame(ode1),matplot(time,cbind(Never,Current,Former)/(Never+Current+Former),type="l"))
-##
-with(data.frame(ode1),cbind(time,cbind(Never,Current,Former)/(Never+Current+Former)))
-with(data.frame(ode1),cbind(time,cbind(Never,Current,Former)))
-##
-odefunc(10,c(1,0,0),parms)
-
-## revised model for Reclassified
 parms <- c(beta20=log(0.01),beta01=c(1,-1),beta12=c(1,-1)) # GLOBAL
 Never <- 1; Current <- 2; Former <- 3; Reclassified <- 4; Death <- 5
 odefunc <- function(t,y,parms) {
@@ -200,8 +209,7 @@ ll(Former,20,50,u=70)
 
 
 
-## We need some simulated data
-## We also need to use the GSL C/C++ code through Rcpp
+## Simulated data
 require(msm)
 require(purged)
 mu0Data <- data.frame(age=seq(0.5,105.5,by=1),
@@ -308,51 +316,24 @@ test2 <- within(test2, {
 test2 <- subset(test2,t1<death1 & t2<death2 & t3<death3)
 ##
 test <- rbind(test0,test1,test2)
+test$freq <- 1.0
+test$recall <- 1L
 
-## TODO: pass mortality rates for current and former smokers to C++
-## TODO: test code for C++ to check with above R code
 objective <- function(beta) {
     int01 <- beta[i <- 1]
     int12 <- beta[i <- i+1]
     beta01 <- beta[(i+1):(i <- i+2)]
     beta12 <- beta[(i+1):(i <- i+2)]
-    beta20 <- log(0.01)
-    ## beta20 <- beta[i <- i+1]
-    print(beta)
-    .Call("gsl_main2Cycle",
-          test$finalState, # finalState
-          test$t1, # t1 = age started smoking
-          test$t2, # t2 = age quit
-          test$t3, # t3 = age observed
-          int01,
-          int12,
-          c(10,20,30), # knots01
-          c(20,40,60), # knots12
-          beta01,
-          beta12,
-          beta20,
-          mu0Data$age,
-          mu0Data$rate,
-          mu1Data$rate,
-          mu2Data$rate,
-          package="purged")
-}
-##objective(init <- c(-3,-4,1,-1,1,-1,log(0.01)))
-system.time(print(objective(init <- c(-3,-4,1,-1,1,-1))))
-
-objectiveReclassified <- function(beta) {
-    int01 <- beta[i <- 1]
-    int12 <- beta[i <- i+1]
-    beta01 <- beta[(i+1):(i <- i+2)]
-    beta12 <- beta[(i+1):(i <- i+2)]
-    beta20 <- log(0.01)
+    ## beta20 <- log(0.01)
     beta20 <- beta[i <- i+1]
     print(beta)
     .Call("gsl_main2Reclassified",
           test$finalState, # finalState
+          test$recall,
           test$t1, # t1 = age started smoking
           test$t2, # t2 = age quit
           test$t3, # t3 = age observed
+          test$freq, # freq = frequency (as double)
           int01,
           int12,
           c(10,20,30), # knots01
@@ -364,10 +345,12 @@ objectiveReclassified <- function(beta) {
           mu0Data$rate,
           mu1Data$rate,
           mu2Data$rate,
+          FALSE, # debug
           package="purged")
 }
 ##objective(init <- c(-3,-4,1,-1,1,-1,log(0.01)))
-system.time(print(objectiveReclassified(init <- c(-3,-4,1,-1,1,-1))))
+system.time(print(objective(init <- c(-3,-4,1,-1,1,-1,log(0.01)))))
+
 
 init <- c(-2.3633004, -3.7141737,  4.4504238, -0.1386734, -0.3805543, -0.4052293, log(0.01))
 options(width=120)
@@ -393,7 +376,7 @@ objective <- function(beta,mc.cores=getOption("mc.cores",2),test) {
             mclapply(0:(mc.cores-1), function(core,test) {
                 j <- which(i==core)
                 data <- test[j,]
-                .Call("gsl_main2",
+                .Call("gsl_main2Reclassified",
                       data$finalState, # finalState
                       data$t1, # t1 = age started smoking
                       data$t2, # t2 = age quit
@@ -419,29 +402,12 @@ require(parallel)
 system.time(mclapply(1:10, function(i,data) objective(init), mc.cores=2))
 
 
-system.time(.Call("gsl_main2Cycle",
-      test$finalState, # finalState
-      test$t1, # t1 = age started smoking
-      test$t2, # t2 = age quit
-      test$t3, # t3 = age observed
-      -3, # int01
-      -4, # int12
-      c(10,20,30), # knots01
-      c(20,40,60), # knots12
-      c(1,-1),     # beta01
-      c(1,-1),     # beta12
-      log(0.01),   # beta20,
-      mu0Data$age,
-      mu0Data$rate,
-      mu1Data$rate,
-      mu2Data$rate,
-      package="purged"))
-
 .Call("gsl_main2Reclassified",
       c(2,0), # finalState
       c(20,NA), # t1 = age started smoking
       c(50,NA), # t2 = age quit
       c(70,70), # t3 = age observed
+      c(1.0, 1.0), # freq
       -3, # int01
       -4, # int12
       c(10,20,30), # knots01
@@ -453,6 +419,7 @@ system.time(.Call("gsl_main2Cycle",
       mu0Data$rate,
       mu1Data$rate,
       mu2Data$rate,
+      TRUE, # debug
       package="purged")
 
 

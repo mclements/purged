@@ -30,9 +30,10 @@ class ns;
 
   // enum's cause problems with RcppGSL::vector, so instead we use int's 
   int Never=0, Current=1, Former=2, Reclassified=3, Death=3;
-
+  int CurrentStatus=0,Recall=1,FormerWithCessation=2;
+  
 struct Param {
-  double int01, int12, beta20;
+  double int01, int12, beta20, maxage;
   gsl_spline *spline0, *spline1, *spline2;
   gsl_interp_accel *acc0, *acc1, *acc2;
   ns *ns01;
@@ -296,39 +297,6 @@ double bounds(double x, double lo, double hi) { return x<lo ? lo : (x>hi ? hi : 
 
 // define the ODE
 int
-funcCycle (double t, const double y[], double f[],
-      void *params)
-{
-  double alpha01, alpha12, alpha20, mu0, mu1, mu2;
-  Param* P = static_cast<Param*>(params);
-  alpha01 = exp(P->int01 + P->ns01->calc(t, P->beta01));
-  alpha12 = exp(P->int12 + P->ns12->calc(t, P->beta12));
-  alpha20 = exp(P->beta20);
-  mu0 = gsl_spline_eval(P->spline0, bounds(t,0.5,105.5), P->acc0);
-  mu1 = gsl_spline_eval(P->spline1, bounds(t,0.5,105.5), P->acc1);
-  mu2 = gsl_spline_eval(P->spline2, bounds(t,0.5,105.5), P->acc2);
-  f[Never] = -(alpha01 + mu0)*y[Never]+alpha20*y[Former]; // uptake for reclassified
-  f[Current] = alpha01*y[Never]-(alpha12+mu1)*y[Current];
-  f[Former] = alpha12*y[Current]-(alpha20+mu2)*y[Former];
-  return GSL_SUCCESS;
-}
-
-double
-mu_ijCycle (int i, int j, double t, gsl_odeiv2_driver * d)
-{
-  Param* P = static_cast<Param*>(d->sys->params);
-  if (i==Never & j==Current)  return exp(P->int01 + P->ns01->calc(t, P->beta01));
-  if (i==Current & j==Former) return exp(P->int12 + P->ns12->calc(t, P->beta12));
-  if (i==Former & j==Never)  return exp(P->beta20);
-  if (j==Death) {
-    if (i==Never) return gsl_spline_eval(P->spline0, bounds(t,0.5,105.5), P->acc0);
-    if (i==Current) return gsl_spline_eval(P->spline1, bounds(t,0.5,105.5), P->acc1);
-    if (i==Former) return gsl_spline_eval(P->spline2, bounds(t,0.5,105.5), P->acc2);
-    }    
-  return 0.0;
-}
-
-int
 funcReclassified (double t, const double y[], double f[],
       void *params)
 {
@@ -337,34 +305,15 @@ funcReclassified (double t, const double y[], double f[],
   alpha01 = exp(P->int01 + P->ns01->calc(t, P->beta01));
   alpha12 = exp(P->int12 + P->ns12->calc(t, P->beta12));
   alpha20 = exp(P->beta20);
-  mu0 = gsl_spline_eval(P->spline0, bounds(t,0.5,105.5), P->acc0);
-  mu1 = gsl_spline_eval(P->spline1, bounds(t,0.5,105.5), P->acc1);
-  mu2 = gsl_spline_eval(P->spline2, bounds(t,0.5,105.5), P->acc2);
+  mu0 = gsl_spline_eval(P->spline0, bounds(t,0.5,P->maxage), P->acc0);
+  mu1 = gsl_spline_eval(P->spline1, bounds(t,0.5,P->maxage), P->acc1);
+  mu2 = gsl_spline_eval(P->spline2, bounds(t,0.5,P->maxage), P->acc2);
   f[Never] = -(alpha01 + mu0)*y[Never];
   f[Current] = alpha01*y[Never]-(alpha12+mu1)*y[Current];
   f[Former] = alpha12*y[Current]-(alpha20+mu2)*y[Former];
   f[Reclassified] = alpha20*y[Former]-mu0*y[Reclassified];
   return GSL_SUCCESS;
 }
-
-// int
-// funcReclassified (double t, const double y[], double f[],
-//       void *params)
-// {
-//   double alpha01, alpha12, alpha20, mu0, mu1, mu2;
-//   Param* P = static_cast<Param*>(params);
-//   alpha01 = exp(P->int01 + P->ns01->calc(t, P->beta01));
-//   alpha12 = exp(P->int12 + P->ns12->calc(t, P->beta12));
-//   alpha20 = exp(P->beta20);
-//   mu0 = gsl_spline_eval(P->spline0, bounds(t,0.5,105.5), P->acc0);
-//   mu1 = gsl_spline_eval(P->spline1, bounds(t,0.5,105.5), P->acc1);
-//   mu2 = gsl_spline_eval(P->spline2, bounds(t,0.5,105.5), P->acc2);
-//   f[Never] = -(alpha01 + mu0)*y[Never];
-//   f[Current] = alpha01*y[Never]-(alpha12+mu1)*y[Current];
-//   f[Former] = alpha12*y[Current]-(alpha20+mu2)*y[Former];
-//   f[Reclassified] = -mu0*y[Reclassified]+alpha20*y[Former]; // no uptake for reclassified
-//   return GSL_SUCCESS;
-// }
 
 double
 mu_ijReclassified (int i, int j, double t, gsl_odeiv2_driver * d)
@@ -374,10 +323,10 @@ mu_ijReclassified (int i, int j, double t, gsl_odeiv2_driver * d)
   if (i==Current & j==Former) return exp(P->int12 + P->ns12->calc(t, P->beta12));
   if (i==Former & j==Reclassified)  return exp(P->beta20);
   if (j==Death) {
-    if (i==Never) return gsl_spline_eval(P->spline0, bounds(t,0.5,105.5), P->acc0);
-    if (i==Current) return gsl_spline_eval(P->spline1, bounds(t,0.5,105.5), P->acc1);
-    if (i==Former) return gsl_spline_eval(P->spline2, bounds(t,0.5,105.5), P->acc2);
-    if (i==Reclassified) return gsl_spline_eval(P->spline0, bounds(t,0.5,105.5), P->acc0);
+    if (i==Never) return gsl_spline_eval(P->spline0, bounds(t,0.5,P->maxage), P->acc0);
+    if (i==Current) return gsl_spline_eval(P->spline1, bounds(t,0.5,P->maxage), P->acc1);
+    if (i==Former) return gsl_spline_eval(P->spline2, bounds(t,0.5,P->maxage), P->acc2);
+    if (i==Reclassified) return gsl_spline_eval(P->spline0, bounds(t,0.5,P->maxage), P->acc0);
   }
   REprintf("Unexpected combinations of states: %i to %j.\n",i,j);
   return 0.0;
@@ -417,53 +366,64 @@ P_iK(int i, double s, double t, gsl_odeiv2_driver * d) {
   return total;
 }
 
-  // Note: does this likelihood ignore cycles aside from Never -> Never ?
-double negllCycle(int state, double s, double t, double u, gsl_odeiv2_driver * d) {
-  double ll;
-  if (state == Never)
-    ll = log(P_ij(Never,Never,0.0,u,d))-log(P_iK(Never,0.0,u,d)); // ignore s and t
-  if (state == Current)
-    ll = log(P_ij(Never,Never,0.0,s,d))+log(mu_ijCycle(Never,Current,s,d))+log(P_ij(Current,Current,s,u,d))-
-      log(P_iK(Never,0.0,u,d)); // ignore t
-  if (state == Former)
-    ll = log(P_ij(Never,Never,0.0,s,d))+log(mu_ijCycle(Never,Current,s,d))+log(P_ij(Current,Current,s,t,d))+
-      log(mu_ijCycle(Current,Former,t,d))+log(P_ij(Former,Former,t,u,d))-log(P_iK(Never,0.0,u,d));
-  return -ll;
-}
-
   // the required mu_ij are not affected by the additional reclassification state
-double negllReclassified(int state, double s, double t, double u, gsl_odeiv2_driver * d) {
-  double ll;
-  if (state == Never) // Never->Never _and_ Never->Reclassified
-    ll = log(P_ij(Never,Never,0.0,u,d)+P_ij(Never,Reclassified,0.0,u,d))-log(P_iK(Never,0.0,u,d)); // ignore s and t
-  if (state == Current)
-    ll = log(P_ij(Never,Never,0.0,s,d))+log(mu_ijReclassified(Never,Current,s,d))+log(P_ij(Current,Current,s,u,d))-
-      log(P_iK(Never,0.0,u,d)); // ignore t
-  if (state == Former)
-    ll = log(P_ij(Never,Never,0.0,s,d))+log(mu_ijReclassified(Never,Current,s,d))+log(P_ij(Current,Current,s,t,d))+
-      log(mu_ijReclassified(Current,Former,t,d))+log(P_ij(Former,Former,t,u,d))-log(P_iK(Never,0.0,u,d));
-  return -ll;
+  double negllReclassified(int state, double s, double t, double u, gsl_odeiv2_driver * d, double freq = 1.0, int recall = 1) {
+  double ll = 0.0;
+  if (recall == Recall) { // recall of smoking history available
+    if (state == Never) // Never->Never _and_ Never->Reclassified
+      ll = log(P_ij(Never,Never,0.0,u,d)+
+	       P_ij(Never,Reclassified,0.0,u,d)); // ignore s and t
+    if (state == Current)
+      ll = log(P_ij(Never,Never,0.0,s,d))+
+	log(mu_ijReclassified(Never,Current,s,d))+
+	log(P_ij(Current,Current,s,u,d)); // ignore t
+    if (state == Former)
+      ll = log(P_ij(Never,Never,0.0,s,d))+
+	log(mu_ijReclassified(Never,Current,s,d))+
+	log(P_ij(Current,Current,s,t,d))+
+	log(mu_ijReclassified(Current,Former,t,d))+
+	log(P_ij(Former,Former,t,u,d));
+  }
+  if (recall == CurrentStatus) {// current status only
+    ll = log(P_ij(Never,state,0.0,u,d));
+  }
+  if (recall == FormerWithCessation & state == Former) {// recall of age quit (not initiation) for former smokers
+    ll = log(P_ij(Never,Current,0.0,t,d)) + 
+      log(mu_ijReclassified(Current,Former,t,d))+
+      log(P_ij(Former,Former,t,u,d)); // ignores s
+  }
+  if (ll == 0.0) REprintf("ll==0.0? (state=%i, recall=%i)\n",state,recall);
+  ll = ll - log(P_iK(Never,0.0,u,d));
+  
+  return -ll*freq;
 }
 
-  RcppExport SEXP gsl_main2Cycle(SEXP _finalState,
-			    SEXP _time1, SEXP _time2, SEXP _time3,
-			    SEXP _int01, SEXP _int12,
-			    SEXP _knots01, SEXP _knots12, 
-			    SEXP _beta01, SEXP _beta12,
-			    SEXP _beta20,
-			    SEXP _ages0,
-				 SEXP _mu0,
-				 SEXP _mu1,
-				 SEXP _mu2)
+  RcppExport SEXP 
+  gsl_main2Reclassified(SEXP _finalState,
+			SEXP _recall,
+			SEXP _time1, SEXP _time2, SEXP _time3,
+			SEXP _freq,
+			SEXP _int01, SEXP _int12,
+			SEXP _knots01, SEXP _knots12, 
+			SEXP _beta01, SEXP _beta12,
+			SEXP _beta20,
+			SEXP _ages0,
+			SEXP _mu0,
+			SEXP _mu1,
+			SEXP _mu2,
+			SEXP _debug)
   {
     
-    bool debug = true;
+    bool debug = Rcpp::as<bool>(_debug);
+
+    RcppGSL::vector<int> recall = _recall; 
 
     RcppGSL::vector<double> 
       finalState = _finalState,
       time1=_time1,
       time2=_time2,
       time3=_time3,
+      freq = _freq,
       knots01=_knots01,
       knots12=_knots12,
       beta01 = _beta01,
@@ -504,127 +464,11 @@ double negllReclassified(int state, double s, double t, double u, gsl_odeiv2_dri
 		    40.0 // centre
 		    );
 
-  Param beta = {int01, int12, beta20, spline0, spline1, spline2, acc0, acc1, acc2, ns01, ns12, beta01, beta12};
+  double maxage = ages0[ages0.size()-1]+0.5;
+  if (debug)
+    Rprintf("maxage=%f\n",maxage);
 
-  gsl_odeiv2_system sys = {funcCycle, NULL, 3, &beta};
-  gsl_odeiv2_driver * d = 
-    gsl_odeiv2_driver_alloc_y_new (&sys, gsl_odeiv2_step_rk8pd,
-				  1e-8, 1e-8, 0.0);
-
-  // clear the values whenever the parameters change
-  P_ijs.clear();
-  // without storing intermediate results, 10000 ODEs took ~20 sec
-
-  double sum_negll = 0.0;
-  for (int i = 0; i< finalState.size(); ++i) 
-    sum_negll += negllCycle(finalState[i], time1[i], time2[i], time3[i], d);
-  //sum_negll += negllCycle(Former, time1[0], time2[0], time3[0],d);
-
-  if (debug) {
-    Rprintf("Size of Pij map = %i\n",P_ijs.size());
-    Rprintf("ll(Never,0.0,0.0,70.0)=%f\n",-negllCycle(Never,0.0,0.0,70.0,d));
-    Rprintf("ll(Never,0.0,0.0,70.0)=%f\n",-negllCycle(Never,0.0,0.0,70.0,d));
-    Rprintf("ll(Current,20.0,0.0,70.0)=%f\n",-negllCycle(Current,20.0,0.0,70.0,d));
-    Rprintf("ll(Former,20.0,50.0,70.0)=%f\n",-negllCycle(Former,20.0,50.0,70.0,d));
-
-    Rprintf("P_ij(Never,Never,0,50)=%f\n",P_ij(Current, Current, 0.0, 20.0, d));
-    Rprintf("mu_ij(Never,Current,20)=%f\n",mu_ijCycle(Never, Current, 20.0, d));
-    Rprintf("P_ij(Current,Current,20,70)=%f\n",P_ij(Current, Current, 20.0, 70.0, d));
-    Rprintf("P_iK(Never,0.0,70.0)=%f\n",P_iK(Never,0.0,70.0,d));
-    
-    Rprintf("negll(Current,20,70)=%f\n",negllCycle(Current, 20.0, 0.0, 70.0,d));
-    Rprintf("negll(Former,20,50,70)=%f\n",negllCycle(Former, 20.0, 50.0, 70.0,d));
-
-  }
-
-  delete ns01;
-  delete ns12;
-
-  finalState.free();
-  time1.free();
-  time2.free();
-  time3.free();
-  knots01.free();
-  knots12.free();
-  beta01.free();
-  beta12.free();
-  ages0.free();
-  mu0.free();
-  mu1.free();
-  mu2.free();
-  
-  gsl_spline_free (spline0);
-  gsl_spline_free (spline1);
-  gsl_spline_free (spline2);
-  gsl_interp_accel_free (acc0);
-  gsl_interp_accel_free (acc1);
-  gsl_interp_accel_free (acc2);
-  gsl_odeiv2_driver_free (d);
-
-  return wrap(sum_negll);
-  }
-
-
-  RcppExport SEXP gsl_main2Reclassified(SEXP _finalState,
-			    SEXP _time1, SEXP _time2, SEXP _time3,
-			    SEXP _int01, SEXP _int12,
-			    SEXP _knots01, SEXP _knots12, 
-			    SEXP _beta01, SEXP _beta12,
-			    SEXP _beta20,
-			    SEXP _ages0,
-				 SEXP _mu0,
-				 SEXP _mu1,
-				 SEXP _mu2)
-  {
-    
-    bool debug = true;
-
-    RcppGSL::vector<double> 
-      finalState = _finalState,
-      time1=_time1,
-      time2=_time2,
-      time3=_time3,
-      knots01=_knots01,
-      knots12=_knots12,
-      beta01 = _beta01,
-      beta12 = _beta12,
-      ages0 = _ages0,
-      mu0 = _mu0,
-      mu1 = _mu1,
-      mu2 = _mu2
-      ;
-
-    double int01=as<double>(_int01), 
-      int12=as<double>(_int12),
-      beta20=as<double>(_beta20);
-  
-    gsl_spline *spline0, *spline1, *spline2;
-  gsl_interp_accel *acc0, *acc1, *acc2;
-  acc0 = gsl_interp_accel_alloc ();
-  acc1 = gsl_interp_accel_alloc ();
-  acc2 = gsl_interp_accel_alloc ();
-  spline0 = gsl_spline_alloc (gsl_interp_cspline, ages0.size());
-  spline1 = gsl_spline_alloc (gsl_interp_cspline, ages0.size());
-  spline2 = gsl_spline_alloc (gsl_interp_cspline, ages0.size());
-  gsl_spline_init (spline0, ages0->data, mu0->data, ages0.size());
-  gsl_spline_init (spline1, ages0->data, mu1->data, ages0.size());
-  gsl_spline_init (spline2, ages0->data, mu2->data, ages0.size());
-
-  // initial parameters for initiation
-  ns * ns01 = new ns(knots01, 
-		    false, // intercept
-		    true, // centred
-		    20.0 // centre
-		    );
-
-  // knots for cessation
-  ns * ns12 = new ns(knots12, 
-		    false, // intercept
-		    true, // centred
-		    40.0 // centre
-		    );
-
-  Param beta = {int01, int12, beta20, spline0, spline1, spline2, acc0, acc1, acc2, ns01, ns12, beta01, beta12};
+  Param beta = {int01, int12, beta20, maxage, spline0, spline1, spline2, acc0, acc1, acc2, ns01, ns12, beta01, beta12};
 
   gsl_odeiv2_system sys = {funcReclassified, NULL, 4, &beta};
   gsl_odeiv2_driver * d = 
@@ -637,8 +481,7 @@ double negllReclassified(int state, double s, double t, double u, gsl_odeiv2_dri
 
   double sum_negll = 0.0;
   for (int i = 0; i< finalState.size(); ++i) 
-    sum_negll += negllReclassified(finalState[i], time1[i], time2[i], time3[i], d);
-  //sum_negll += negllReclassified(Former, time1[0], time2[0], time3[0],d);
+    sum_negll += negllReclassified(finalState[i], time1[i], time2[i], time3[i], d, freq[i], recall[i]);
 
   if (debug) {
     Rprintf("Size of Pij map = %i\n",P_ijs.size());
