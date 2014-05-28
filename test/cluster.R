@@ -1,0 +1,10 @@
+library(Rmpi)
+library(snow)
+library(parallel)
+
+cl <- makeMPIcluster(max(1,mpi.universe.size() - 1))
+cat(sprintf("Running with %d workers\n", length(cl)))
+system.time(r <- parLapply(cl, 1:1e6, sqrt))
+##print(r)
+stopCluster(cl)
+mpi.quit()

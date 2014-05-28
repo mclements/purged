@@ -1,0 +1,5 @@
+library(parallel)
+cores <- detectCores()
+cat(sprintf("Running on %d cores\n", cores))
+r <- mclapply(1:10, sqrt, mc.cores=cores)
+print(r)
