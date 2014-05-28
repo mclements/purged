@@ -41,14 +41,22 @@ if (doOnce <- FALSE) {
                  Current=subset(mort,cohort==.cohort & sex==.sex & smkstat == 2)$final,
                  Former=subset(mort,cohort==.cohort & sex==.sex & smkstat == 3)$final))
         })
-    save(smokingList,mortList,file="smokingList-20140528.RData")
+    class(smokingList) <- c("lookupList","list")
+    subset.lookupList <- function(obj,subset) {
+        e <- substitute(subset)
+        obj[sapply(obj, function(obji) eval(e,obji))]
+    }
+    save(smokingList,mortList,subset.lookupList,file="~/Documents/clients/ted/smokingList-20140528.RData")
 }
+
+length(subset(smokingList,sex==1 & cohort == 1948))
+length(subset(smokingList,sex==1))
+
+
 
 load(file="~/Documents/clients/ted/smokingList-20140528.RData")
 require(purged)
-test <- smokingList[[1]]
-smoking <- test$smoking
-mort <- test$mort
+test <- subset(smokingList,sex==1 & cohort<1950 & cohort>=1945)
 objective <- function(beta) {
     int01 <- beta[i <- 1]
     int12 <- beta[i <- i+1]
@@ -56,6 +64,9 @@ objective <- function(beta) {
     beta12 <- beta[(i+1):(i <- i+2)]
     beta20 <- beta[i <- i+1]
     print(beta)
+    sum(sapply(test, function(obj) {
+        smoking <- obj$smoking
+        mort <- obj$mort
     .Call("gsl_main2Reclassified",
           smoking$smkstat - 1, 
           as.integer(smoking$recall),
@@ -76,41 +87,76 @@ objective <- function(beta) {
           mort$Former,
           FALSE, # debug
           package="purged")
+    }))
 }
 ##objective(init <- c(-3,-4,1,-1,1,-1,log(0.01)))
 system.time(print(objective(init <- c(-3,-4,1,-1,1,-1,log(0.01)))))
 
-init <- c(-2.3633004, -3.7141737,  4.4504238, -0.1386734, -0.3805543, -0.4052293, log(0.01))
+init <- c(-1.93636374725587, -3.4001339744127, 3.01006761619528, -3.02733667354355, 
+1.01152056888029, 0.394911534677803, -3.98158254291634)
 options(width=120)
-optim1 <- optim(init,objective,control=list(trace=2)) # SLOW
-optim1Hess <- optimHess(optim1$par,objective)
+optim1 <- optim(init,objective,control=list(trace=2),hessian=TRUE) # SLOW
+
+## Identifiability constraint for APC model
+require(mgcv)
+require(rstpm2)
+somedata <- within(expand.grid(age=seq(0,80,by=5.0),
+                                  year=seq(1980,2010,by=1.0)),
+                      { cohort <- year-age
+                        y <- rnorm(length(age))
+                    })
+gam1 <- gam(y~s(age)+s(cohort)+s(year),
+            data=somedata)
 
 
-## How to look at the estimated rates?
+
+
+
+## Display the estimated transition intensities
 require(splines)
 display <- function(fit) {
     beta <- fit$par
+    sigma <- solve(fit$hessian)
     int01 <- beta[i <- 1]
     int12 <- beta[i <- i+1]
-    beta01 <- beta[(i+1):(i <- i+2)]
-    beta12 <- beta[(i+1):(i <- i+2)]
+    beta01 <- c(int01,beta[(i+1):(i <- i+2)])
+    beta12 <- c(int12,beta[(i+1):(i <- i+2)])
     beta20 <- beta[i <- i+1]
     knots01 <- c(10,20,30)
     knots12 <- c(20,40,60)
-    nsfun <- function(knots,centre=knots[1],intercept=0) {
+    sigma01 <- sigma[c(1,3,4),c(1,3,4)]
+    sigma12 <- sigma[c(2,5,6),c(2,5,6)]
+    sigma20 <- sigma[7,7]
+    nsfun <- function(knots,centre=knots[1]) {
         nsobj <- ns(knots,df=length(knots)-1)
         nsref <- predict(nsobj,centre)
         fun <- function(t,beta) apply(predict(nsobj,t),1,
-                                      function(row) exp(intercept+sum((row-nsref) * beta)))
+                                      function(row) exp(beta[1]+sum((row-nsref) * beta[-1])))
         fun
     }
-    alpha01 <- nsfun(knots01,centre=20,intercept=int01)
-    alpha12 <- nsfun(knots12,centre=40,intercept=int12)
+    nsXfun <- function(knots,centre=knots[1]) {
+        nsobj <- ns(knots,df=length(knots)-1)
+        nsref <- predict(nsobj,centre)
+        fun <- function(t,beta) apply(predict(nsobj,t),1,
+                                      function(row) c(1,row-nsref))
+        fun
+    }
+    alpha01 <- nsfun(knots01,centre=20)
+    alpha12 <- nsfun(knots12,centre=40)
+    X01 <- nsXfun(knots01,centre=20)
+    X12 <- nsXfun(knots12,centre=40)
     ages=seq(0,100,length=301)
-    plot(ages,alpha01(ages,beta01),type="l")
-    plot(ages,alpha12(ages,beta12),type="l")
+    a01 <- alpha01(ages,beta01)
+    sd01 <- as.vector(sqrt(colSums(X01(ages)* (sigma01 %*% X01(ages)))))
+    matplot(ages,a01*exp(cbind(0,-1.96*sd01,1.96*sd01)),type="l")
+    a12 <- alpha12(ages,beta12)
+    sd12 <- as.vector(sqrt(colSums(X12(ages)* (sigma12 %*% X12(ages)))))
+    matplot(ages,a12*exp(cbind(0,-1.96*sd12,1.96*sd12)),type="l")
+    return(c(alpha20=exp(beta20),lower=exp(beta20-1.96*sqrt(sigma20)),
+             lower=exp(beta20+1.96*sqrt(sigma20))))
 }
 par(mfrow=c(1,2))
+##debug(display)
 display(optim1)
 
 
