@@ -41,74 +41,148 @@ if (doOnce <- FALSE) {
                  Current=subset(mort,cohort==.cohort & sex==.sex & smkstat == 2)$final,
                  Former=subset(mort,cohort==.cohort & sex==.sex & smkstat == 3)$final))
         })
+    ## cohorts <- data.frame(t(sapply(smokingList,function(obj) c(sex=obj$sex,cohort=obj$cohort))))
+    ## smokingList <- smokingList[with(cohorts,order(sex,cohort))]
     class(smokingList) <- c("lookupList","list")
     subset.lookupList <- function(obj,subset) {
         e <- substitute(subset)
-        obj[sapply(obj, function(obji) eval(e,obji))]
+        obj[sapply(obj, function(x) eval(e,x,parent.frame()))]
     }
     save(smokingList,mortList,subset.lookupList,file="~/Documents/clients/ted/smokingList-20140528.RData")
 }
 
-length(subset(smokingList,sex==1 & cohort == 1948))
-length(subset(smokingList,sex==1))
-
-
-
-load(file="~/Documents/clients/ted/smokingList-20140528.RData")
+library(Rmpi)
+library(snow)
+library(parallel)
 require(purged)
-test <- subset(smokingList,sex==1 & cohort<1950 & cohort>=1945)
-objective <- function(beta) {
-    int01 <- beta[i <- 1]
-    int12 <- beta[i <- i+1]
-    beta01 <- beta[(i+1):(i <- i+2)]
-    beta12 <- beta[(i+1):(i <- i+2)]
-    beta20 <- beta[i <- i+1]
-    print(beta)
-    sum(sapply(test, function(obj) {
-        smoking <- obj$smoking
-        mort <- obj$mort
-    .Call("gsl_main2Reclassified",
-          smoking$smkstat - 1, 
-          as.integer(smoking$recall),
-          smoking$agestart,
-          smoking$agequit,
-          smoking$age, # age observed
-          smoking$freq, # frequency (as double)
-          int01,
-          int12,
-          c(10,20,30), # knots01
-          c(20,40,60), # knots12
-          beta01,
-          beta12,
-          beta20,
-          mort$age,
-          mort$Never,
-          mort$Current,
-          mort$Former,
-          FALSE, # debug
-          package="purged")
-    }))
+##load(file="~/Documents/clients/ted/smokingList-20140528.RData")
+load(file="~/src/R/purged/test/smokingList-20140528.RData")
+strata <- transform(expand.grid(from=seq(1890,1990,by=5),sex=1:2),
+                    to=from+4)
+smokingSex <- sapply(smokingList,function(obj) obj$sex)
+smokingCohort <- sapply(smokingList,function(obj) obj$cohort)
+stratifiedData <- lapply(1:nrow(strata), function(i) {
+    smokingList[strata$sex[i]==smokingSex &
+                smokingCohort>=strata$from[i] & smokingCohort<=strata$to[i]]
+})
+cl <- makeMPIcluster(max(1,mpi.universe.size() - 1))
+cat(sprintf("Running with %d workers\n", length(cl)))
+clusterCall(cl, function() { library(purged); NULL })
+do.all <- function(strata) {
+    optimObjective <- function(stratum) {
+        objective <- function(beta) {
+            int01 <- beta[i <- 1]
+            int12 <- beta[i <- i+1]
+            beta01 <- beta[(i+1):(i <- i+2)]
+            beta12 <- beta[(i+1):(i <- i+2)]
+            beta20 <- beta[i <- i+1]
+            do.call("sum",
+                    lapply(stratum, function(obj) {
+                        smoking <- obj$smoking
+                        mort <- obj$mort
+                        .Call("gsl_main2Reclassified",
+                              smoking$smkstat - 1, 
+                              as.integer(smoking$recall),
+                              smoking$agestart,
+                              smoking$agequit,
+                              smoking$age, # age observed
+                              smoking$freq, # frequency (as double)
+                              int01,
+                              int12,
+                              c(10,20,30), # knots01
+                              c(20,40,60), # knots12
+                              beta01,
+                              beta12,
+                              beta20,
+                              mort$age,
+                              mort$Never,
+                              mort$Current,
+                              mort$Former,
+                              FALSE, # debug
+                              package="purged")
+                    }))
+        }
+        init <- c(-1.93636374725587, -3.4001339744127, 3.01006761619528, -3.02733667354355, 
+                  1.01152056888029, 0.394911534677803, -3.98158254291634)
+        optim(init,objective,control=list(trace=0),hessian=TRUE)
+    }
+    clusterApply(cl,strata, optimObjective)
 }
-##objective(init <- c(-3,-4,1,-1,1,-1,log(0.01)))
-system.time(print(objective(init <- c(-3,-4,1,-1,1,-1,log(0.01)))))
-
-init <- c(-1.93636374725587, -3.4001339744127, 3.01006761619528, -3.02733667354355, 
-1.01152056888029, 0.394911534677803, -3.98158254291634)
-options(width=120)
-optim1 <- optim(init,objective,control=list(trace=2),hessian=TRUE) # SLOW
-
-## Identifiability constraint for APC model
-require(mgcv)
-require(rstpm2)
-somedata <- within(expand.grid(age=seq(0,80,by=5.0),
-                                  year=seq(1980,2010,by=1.0)),
-                      { cohort <- year-age
-                        y <- rnorm(length(age))
-                    })
-gam1 <- gam(y~s(age)+s(cohort)+s(year),
-            data=somedata)
+out <- do.all(stratifiedData)
+save("~/src/R/purged/test/out-20140528.RData")
+##objective(init)
+stopCluster(cl)
+##mpi.quit()
 
 
+library(Rmpi)
+library(snow)
+library(parallel)
+require(purged)
+##load(file="~/Documents/clients/ted/smokingList-20140528.RData")
+load(file="~/src/R/purged/test/smokingList-20140528.RData")
+strata <- transform(expand.grid(from=seq(1890,1990,by=5),sex=1:2),
+                    to=from+4)
+smokingSex <- sapply(smokingList,function(obj) obj$sex)
+smokingCohort <- sapply(smokingList,function(obj) obj$cohort)
+stratifiedData <- lapply(1:nrow(strata), function(i) {
+    smokingList[strata$sex[i]==smokingSex &
+                smokingCohort>=strata$from[i] & smokingCohort<=strata$to[i]]
+})
+cl <- makeMPIcluster(max(1,mpi.universe.size() - 1))
+cat(sprintf("Running with %d workers\n", length(cl)))
+clusterCall(cl, function() { library(purged); NULL })
+do.all <- function(strata) {
+    optimObjective <- function(data) {
+        objective <- function(beta) {
+            int01 <- beta[i <- 1]
+            int12 <- beta[i <- i+1]
+            beta01 <- beta[(i+1):(i <- i+2)]
+            beta12 <- beta[(i+1):(i <- i+2)]
+            beta20 <- beta[i <- i+1]
+            do.call("sum",
+                    clusterApply(cl, data, function(obj) {
+                        smoking <- obj$smoking
+                        mort <- obj$mort
+                        .Call("gsl_main2Reclassified",
+                              smoking$smkstat - 1, 
+                              as.integer(smoking$recall),
+                              smoking$agestart,
+                              smoking$agequit,
+                              smoking$age, # age observed
+                              smoking$freq, # frequency (as double)
+                              int01,
+                              int12,
+                              c(10,20,30), # knots01
+                              c(20,40,60), # knots12
+                              beta01,
+                              beta12,
+                              beta20,
+                              mort$age,
+                              mort$Never,
+                              mort$Current,
+                              mort$Former,
+                              FALSE, # debug
+                              package="purged")
+                    }))
+        }
+        init <- c(-1.93636374725587, -3.4001339744127, 3.01006761619528, -3.02733667354355, 
+                  1.01152056888029, 0.394911534677803, -3.98158254291634)
+        optim(init,objective,control=list(trace=2,maxit=150),hessian=TRUE)
+    }
+    lapply(strata, optimObjective)
+}
+out <- do.all(stratifiedData)
+out1990 <- do.all(stratifiedData[c(21,42)])
+##out32 <- do.all(stratifiedData[32])
+##out11 <- do.all(stratifiedData[11])
+##out1910 <- do.all(stratifiedData[c(5,26)])
+save(out32,out11,out1910,"~/src/R/purged/test/out-20140528.RData")
+##objective(init)
+stopCluster(cl)
+##mpi.quit()
+
+## optim1 <- optim(init,objective,control=list(trace=2),hessian=TRUE) # SLOW
 
 
 
@@ -148,17 +222,100 @@ display <- function(fit) {
     ages=seq(0,100,length=301)
     a01 <- alpha01(ages,beta01)
     sd01 <- as.vector(sqrt(colSums(X01(ages)* (sigma01 %*% X01(ages)))))
-    matplot(ages,a01*exp(cbind(0,-1.96*sd01,1.96*sd01)),type="l")
+    matplot(ages,a01*exp(cbind(0,-1.96*sd01,1.96*sd01)),type="l",xlim=c(0,40),
+            xlab="Age (years)", ylab="Hazard")
     a12 <- alpha12(ages,beta12)
     sd12 <- as.vector(sqrt(colSums(X12(ages)* (sigma12 %*% X12(ages)))))
-    matplot(ages,a12*exp(cbind(0,-1.96*sd12,1.96*sd12)),type="l")
-    return(c(alpha20=exp(beta20),lower=exp(beta20-1.96*sqrt(sigma20)),
-             lower=exp(beta20+1.96*sqrt(sigma20))))
+    matplot(ages,a12*exp(cbind(0,-1.96*sd12,1.96*sd12)),type="l",xlim=c(0,80),
+            xlab="Age (years)", ylab="Hazard", ylim=c(0,min(1,max(a12))))
+    alpha20 <- list(est=exp(beta20),lower=exp(beta20-1.96*sqrt(sigma20)),
+                 upper=exp(beta20+1.96*sqrt(sigma20)))
+    cat(sprintf("alpha20=%f (95%% CI: %f, %f)\n",alpha20$est,alpha20$lower,alpha20$upper))
+    invisible(list(ages=ages,a01=a01,sd01=sd01,a12=a12,sd12=sd12))
 }
 par(mfrow=c(1,2))
 ##debug(display)
-display(optim1)
+plot11 <- display(out11[[1]])
+plot32 <- display(out32[[1]])
+plot1990.1 <- display(out1990[[1]])
+plot1990.2 <- display(out1990[[2]])
 
+with(plot11, plot(ages,a01,type="l"))
+with(plot32, lines(ages,a01,lty=2))
+with(plot11, plot(ages,a12,type="l"))
+with(plot32, lines(ages,a12,lty=2))
+
+plot1910.1 <- display(out1910[[1]])
+plot1910.2 <- display(out1910[[2]])
+with(plot1910.1, plot(ages,a01,type="l"))
+with(plot1910.2, lines(ages,a01,lty=2))
+with(plot1910.1, plot(ages,a12,type="l"))
+with(plot1910.2, lines(ages,a12,lty=2))
+
+
+
+
+## Identifiability constraint for APC model
+require(mgcv)
+require(rstpm2)
+somedata <- within(expand.grid(age=seq(0,80,by=5.0),
+                                  year=seq(1980,2010,by=1.0)),
+                      { cohort <- year-age
+                        y <- rnorm(length(age))
+                    })
+gam1 <- gam(y~s(age)+s(cohort)+s(year),
+            data=somedata)
+
+
+## bsplinepen
+require(splines)
+require(fda)
+basisobj <- fda::create.bspline.basis(c(0,1),13)
+x=seq(0,1,length=11)
+bs(x,knots=x[2:10],int=T) - predict(basisobj)
+
+ns.Q <- 
+function (x, df = NULL, knots = NULL, intercept = FALSE, Boundary.knots = range(x)) 
+{
+    nx <- names(x)
+    x <- as.vector(x)
+    nax <- is.na(x)
+    if (nas <- any(nax)) 
+        x <- x[!nax]
+    if (!missing(Boundary.knots)) {
+        Boundary.knots <- sort(Boundary.knots)
+        outside <- (ol <- x < Boundary.knots[1L]) | (or <- x > 
+            Boundary.knots[2L])
+    }
+    else outside <- FALSE
+    if (!is.null(df) && is.null(knots)) {
+        nIknots <- df - 1L - intercept
+        if (nIknots < 0L) {
+            nIknots <- 0L
+            warning(gettextf("'df' was too small; have used %d", 
+                1L + intercept), domain = NA)
+        }
+        knots <- if (nIknots > 0L) {
+            knots <- seq.int(0, 1, length.out = nIknots + 2L)[-c(1L, 
+                nIknots + 2L)]
+            stats::quantile(x[!outside], knots)
+        }
+    }
+    else nIknots <- length(knots) 
+    Aknots <- sort(c(rep(Boundary.knots, 4L), knots))
+    const <- splineDesign(Aknots, Boundary.knots, 4, c(2, 2))
+    if (!intercept) {
+        const <- const[, -1, drop = FALSE]
+    }
+    qr.const <- qr(t(const))
+    qmat <- qr.Q(qr.const, complete=TRUE)
+    qmat[, -(1L:2L), drop = FALSE]
+}
+(bs(x,knots=x[2:10],int=T) %*% ns.Q(x,knots=x[2:10],int=T)) - ns(x,knots=x[2:10],int=T)
+
+
+zapsmall(ns.Q(x,knots=x[2:10],int=T) %*% t(ns.Q(x,knots=x[2:10],int=T)))
+bsplinepen(basisobj)
 
 ## Reimplement the example in R
 require(splines)
