@@ -245,18 +245,16 @@ display <- function(fit) {
 }
 par(mfrow=c(2,2))
 
+## display results from HPC
 ## system("ssh mc2495@omega.hpc.yale.edu `cd ~/src/R/purged/test; ./submit_cluster.sh`")
-system("scp mc2495@omega.hpc.yale.edu:~/src/R/purged/test/out-20140528.RData ~/src/R/purged/test/")
+## system("scp mc2495@omega.hpc.yale.edu:~/src/R/purged/test/out-20140528.RData ~/src/R/purged/test/")
 load("~/src/R/purged/test/out-20140528.RData")
 load(file="~/src/R/purged/test/smokingList-20140528.RData")
 strata <- transform(expand.grid(from=seq(1890,1990,by=5),sex=1:2),
                     to=from+4)
 smokingSex <- sapply(smokingList,function(obj) obj$sex)
 smokingCohort <- sapply(smokingList,function(obj) obj$cohort)
-
-cbind(strata,t(sapply(out,function(obj) display(obj)$alpha20)))
-
-
+## cbind(strata,t(sapply(out,function(obj) display(obj)$alpha20)))
 summ <- do.call("rbind",
         lapply(1:length(out),function(i)
                with(display(out[[i]]),
@@ -272,7 +270,6 @@ summ <- do.call("rbind",
                                upper12=a12*exp(1.96*sd12)))))
 summ.1 <- subset(summ,sex==1 & cohort<=1950)
 summ.2 <- subset(summ,sex==2 & cohort<=1950)
-
 pdf("~/src/R/purged/test/coplot-1.pdf")
 coplot(one ~ ages | factor(cohort),
          data=summ.1,
@@ -297,7 +294,6 @@ coplot(one ~ ages | factor(cohort),
          }, type="l", ylim=c(0,.2), xlim=c(10,35), xlab="Age (years)",
          ylab="Hazard")
 dev.off()
-
 pdf("~/src/R/purged/test/coplot-3.pdf")
 coplot(one ~ ages | factor(cohort),
          data=summ.1,
@@ -323,15 +319,13 @@ coplot(one ~ ages | factor(cohort),
          ylab="Hazard")
 dev.off()
 
-
+## scratch
 display(out[[1]])
 display(out[[1+21]])
-
 plot.1 <- display(out[[1]])
 plot.2 <- display(out[[1+21]])
 plot.1 <- display(out[[11]])
 plot.2 <- display(out[[11+21]])
-
 with(plot.1, plot(ages,a01,type="l",xlim=c(0,40)))
 with(plot.2, lines(ages,a01,lty=2))
 with(plot.1, plot(ages,a12,type="l"))
@@ -350,15 +344,16 @@ somedata <- within(expand.grid(age=seq(0,80,by=5.0),
                     })
 gam1 <- gam(y~s(age)+s(cohort)+s(year),
             data=somedata)
-
-
+##
+##
 ## bsplinepen
 require(splines)
 require(fda)
 basisobj <- fda::create.bspline.basis(c(0,1),13)
 x=seq(0,1,length=11)
 bs(x,knots=x[2:10],int=T) - predict(basisobj)
-
+##
+##
 ns.Q <- 
 function (x, df = NULL, knots = NULL, intercept = FALSE, Boundary.knots = range(x)) 
 {
@@ -397,8 +392,8 @@ function (x, df = NULL, knots = NULL, intercept = FALSE, Boundary.knots = range(
     qmat[, -(1L:2L), drop = FALSE]
 }
 (bs(x,knots=x[2:10],int=T) %*% ns.Q(x,knots=x[2:10],int=T)) - ns(x,knots=x[2:10],int=T)
-
-
+##
+##
 zapsmall(ns.Q(x,knots=x[2:10],int=T) %*% t(ns.Q(x,knots=x[2:10],int=T)))
 bsplinepen(basisobj)
 
@@ -494,8 +489,6 @@ ll <- function(finalState,s,t,u) {
 ll(Never,u=70)
 ll(Current,20,u=70)
 ll(Former,20,50,u=70)
-
-
 
 ## Simulated data
 require(msm)
@@ -637,13 +630,64 @@ objective <- function(beta) {
           package="purged")
 }
 ##objective(init <- c(-3,-4,1,-1,1,-1,log(0.01)))
-system.time(print(objective(init <- c(-3,-4,1,-1,1,-1,log(0.01)))))
+system.time(print(1-100960.6/objective(init <- c(-3,-4,1,-1,1,-1,log(0.01))))) # should be small
+##init <- c(-2.3633004, -3.7141737,  4.4504238, -0.1386734, -0.3805543, -0.4052293, log(0.01))
+##options(width=120)
+##optim1 <- optim(init,objectiveReclassified,control=list(trace=2)) # SLOW
 
+## RcppExport SEXP 
+## gsl_main2ReclassifiedPS(SEXP _finalState,
+##       		  SEXP _recall,
+##       		  SEXP _time1, SEXP _time2, SEXP _time3,
+##       		  SEXP _freq,
+##       		  SEXP _int01, SEXP _int12,
+##       		  SEXP _lower01, SEXP _upper01, SEXP _nterm01, SEXP _pmatrix01, SEXP _sp01,
+##       		  SEXP _lower12, SEXP _upper12, SEXP _nterm12, SEXP _pmatrix12, SEXP _sp12,
+##       		  SEXP _beta01, SEXP _beta12,
+##       		  SEXP _beta20,
+##       		  SEXP _ages0,
+##       		  SEXP _mu0,
+##       		  SEXP _mu1,
+##       		  SEXP _mu2,
+##       		  SEXP _debug)
+require(survival)
+objectivePS <- function(beta) {
+    int01 <- beta[i <- 1]
+    int12 <- beta[i <- i+1]
+    beta01 <- beta[(i+1):(i <- i+10)]
+    beta12 <- beta[(i+1):(i <- i+10)]
+    ## beta20 <- log(0.01)
+    beta20 <- beta[i <- i+1]
+    print(beta)
+    .Call("gsl_main2ReclassifiedPS",
+          test$finalState, # finalState
+          test$recall,
+          test$t1, # t1 = age started smoking
+          test$t2, # t2 = age quit
+          test$t3, # t3 = age observed
+          test$freq, # freq = frequency (as double)
+          int01,
+          int12,
+          10, 60, 8L, attr(pspline(c(10,60),nterm=8),"pparm"), 1,
+          10, 30, 8L, attr(pspline(c(10,30),nterm=8),"pparm"), 1,
+          beta01,
+          beta12,
+          beta20,
+          mu0Data$age,
+          mu0Data$rate,
+          mu1Data$rate,
+          mu2Data$rate,
+          FALSE, # debug
+          package="purged")
+}
+init <- c(-3,
+          -4,
+          rep(0.1,8+2),
+          rep(0.1,8+2),
+          log(0.01))
+system.time(print(objectivePS(init)))
 
-init <- c(-2.3633004, -3.7141737,  4.4504238, -0.1386734, -0.3805543, -0.4052293, log(0.01))
-options(width=120)
-optim1 <- optim(init,objectiveReclassified,control=list(trace=2)) # SLOW
-
+require(survival)
 
 
 
