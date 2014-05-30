@@ -15,6 +15,14 @@ if (doOnce <- FALSE) {
     require(foreign)
     smoking <- within(read.dta("cisnet_apc_mar19_agg.dta"),
                       { cohort <- year-age })
+    Lab.palette <- colorRampPalette(c("white", "darkblue"), space = "Lab")
+    x <- subset(smoking,select=c(year,age))
+    jpeg("~/src/R/purged/test/nhis_density.jpg",width=480*4,height=480*4,pointsize=12*4)
+    smoothScatter(x, colramp = Lab.palette,xlab="Calendar year",ylab="Age (years)")
+    dev.off()
+    pdf("~/src/R/purged/test/nhis_density.pdf")
+    smoothScatter(x, colramp = Lab.palette,xlab="Calendar year",ylab="Age (years)")
+    dev.off()
     ## recall: 0=current status, 1=recall, 2=age quit only
     ##
     cohorts <- unique(subset(smoking,cohort>=1890,select=c(sex,cohort)))
@@ -50,6 +58,7 @@ if (doOnce <- FALSE) {
     }
     save(smokingList,mortList,subset.lookupList,file="~/Documents/clients/ted/smokingList-20140528.RData")
 }
+
 
 library(Rmpi)
 library(snow)
@@ -223,34 +232,110 @@ display <- function(fit) {
     a01 <- alpha01(ages,beta01)
     sd01 <- as.vector(sqrt(colSums(X01(ages)* (sigma01 %*% X01(ages)))))
     matplot(ages,a01*exp(cbind(0,-1.96*sd01,1.96*sd01)),type="l",xlim=c(0,40),
-            xlab="Age (years)", ylab="Hazard")
+            xlab="Age (years)", ylab="Hazard", main="Smoking initiation")
     a12 <- alpha12(ages,beta12)
     sd12 <- as.vector(sqrt(colSums(X12(ages)* (sigma12 %*% X12(ages)))))
     matplot(ages,a12*exp(cbind(0,-1.96*sd12,1.96*sd12)),type="l",xlim=c(0,80),
-            xlab="Age (years)", ylab="Hazard", ylim=c(0,min(1,max(a12))))
+            xlab="Age (years)", ylab="Hazard", ylim=c(0,min(1,max(a12))),
+            main="Smoking cessation")
     alpha20 <- list(est=exp(beta20),lower=exp(beta20-1.96*sqrt(sigma20)),
                  upper=exp(beta20+1.96*sqrt(sigma20)))
     cat(sprintf("alpha20=%f (95%% CI: %f, %f)\n",alpha20$est,alpha20$lower,alpha20$upper))
-    invisible(list(ages=ages,a01=a01,sd01=sd01,a12=a12,sd12=sd12))
+    invisible(list(ages=ages,a01=a01,sd01=sd01,a12=a12,sd12=sd12,alpha20=alpha20))
 }
-par(mfrow=c(1,2))
-##debug(display)
-plot11 <- display(out11[[1]])
-plot32 <- display(out32[[1]])
-plot1990.1 <- display(out1990[[1]])
-plot1990.2 <- display(out1990[[2]])
+par(mfrow=c(2,2))
 
-with(plot11, plot(ages,a01,type="l"))
-with(plot32, lines(ages,a01,lty=2))
-with(plot11, plot(ages,a12,type="l"))
-with(plot32, lines(ages,a12,lty=2))
+## system("ssh mc2495@omega.hpc.yale.edu `cd ~/src/R/purged/test; ./submit_cluster.sh`")
+system("scp mc2495@omega.hpc.yale.edu:~/src/R/purged/test/out-20140528.RData ~/src/R/purged/test/")
+load("~/src/R/purged/test/out-20140528.RData")
+load(file="~/src/R/purged/test/smokingList-20140528.RData")
+strata <- transform(expand.grid(from=seq(1890,1990,by=5),sex=1:2),
+                    to=from+4)
+smokingSex <- sapply(smokingList,function(obj) obj$sex)
+smokingCohort <- sapply(smokingList,function(obj) obj$cohort)
 
-plot1910.1 <- display(out1910[[1]])
-plot1910.2 <- display(out1910[[2]])
-with(plot1910.1, plot(ages,a01,type="l"))
-with(plot1910.2, lines(ages,a01,lty=2))
-with(plot1910.1, plot(ages,a12,type="l"))
-with(plot1910.2, lines(ages,a12,lty=2))
+cbind(strata,t(sapply(out,function(obj) display(obj)$alpha20)))
+
+
+summ <- do.call("rbind",
+        lapply(1:length(out),function(i)
+               with(display(out[[i]]),
+                    data.frame(one=1,
+                               sex=strata$sex[i],
+                               cohort=strata$from[i],
+                               ages=ages,
+                               a01=a01,
+                               lower01=a01*exp(-1.96*sd01),
+                               upper01=a01*exp(1.96*sd01),
+                               a12=a12,
+                               lower12=a12*exp(-1.96*sd12),
+                               upper12=a12*exp(1.96*sd12)))))
+summ.1 <- subset(summ,sex==1 & cohort<=1950)
+summ.2 <- subset(summ,sex==2 & cohort<=1950)
+
+pdf("~/src/R/purged/test/coplot-1.pdf")
+coplot(one ~ ages | factor(cohort),
+         data=summ.1,
+         subscripts=T,
+         panel=function(x,y,subscripts,...){
+           z <- summ.1[subscripts,]
+           lines(z$ages,z$a01, ...)
+           lines(z$ages,z$lower01, lty=2, ...)
+           lines(z$ages,z$upper01, lty=2, ...)
+         }, type="l", ylim=c(0,.2), xlim=c(10,35), xlab="Age (years)",
+         ylab="Hazard")
+dev.off()
+pdf("~/src/R/purged/test/coplot-2.pdf")
+coplot(one ~ ages | factor(cohort),
+         data=summ.2,
+         subscripts=T,
+         panel=function(x,y,subscripts,...){
+           z <- summ.2[subscripts,]
+           lines(z$ages,z$a01, ...)
+           lines(z$ages,z$lower01, lty=2, ...)
+           lines(z$ages,z$upper01, lty=2, ...)
+         }, type="l", ylim=c(0,.2), xlim=c(10,35), xlab="Age (years)",
+         ylab="Hazard")
+dev.off()
+
+pdf("~/src/R/purged/test/coplot-3.pdf")
+coplot(one ~ ages | factor(cohort),
+         data=summ.1,
+         subscripts=T,
+         panel=function(x,y,subscripts,...){
+           z <- summ.1[subscripts,]
+           lines(z$ages,z$a12, ...)
+           lines(z$ages,z$lower12, lty=2, ...)
+           lines(z$ages,z$upper12, lty=2, ...)
+         }, type="l", ylim=c(0,.15), xlim=c(10,70), xlab="Age (years)",
+         ylab="Hazard")
+dev.off()
+pdf("~/src/R/purged/test/coplot-4.pdf")
+coplot(one ~ ages | factor(cohort),
+         data=summ.2,
+         subscripts=T,
+         panel=function(x,y,subscripts,...){
+           z <- summ.2[subscripts,]
+           lines(z$ages,z$a12, ...)
+           lines(z$ages,z$lower12, lty=2, ...)
+           lines(z$ages,z$upper12, lty=2, ...)
+         }, type="l", ylim=c(0,.15), xlim=c(10,70), xlab="Age (years)",
+         ylab="Hazard")
+dev.off()
+
+
+display(out[[1]])
+display(out[[1+21]])
+
+plot.1 <- display(out[[1]])
+plot.2 <- display(out[[1+21]])
+plot.1 <- display(out[[11]])
+plot.2 <- display(out[[11+21]])
+
+with(plot.1, plot(ages,a01,type="l",xlim=c(0,40)))
+with(plot.2, lines(ages,a01,lty=2))
+with(plot.1, plot(ages,a12,type="l"))
+with(plot.2, lines(ages,a12,lty=2))
 
 
 

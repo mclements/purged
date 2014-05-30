@@ -1,7 +1,7 @@
 \documentclass[11pt,a4paper]{article}
 
 
-\usepackage{bm,amsmath,wasysym,tikz,natbib}
+\usepackage{bm,amsmath,wasysym,tikz,natbib,graphicx}
 \usetikzlibrary{arrows,decorations.pathmorphing,backgrounds,positioning,fit,petri,matrix}
 \usepackage[margin=2.5cm]{geometry} % wide margins
 \usepackage{amsmath}
@@ -10,7 +10,7 @@
 
 \title{Multi-state Markov model of smoking behaviour: estimation of
   uptake and cessation from multiple surveys}
-\author{Mark~Clements}
+\author{Mark~Clements, Theodore~Holford}
 
 \usepackage{listings,fancyvrb}
 \usepackage{color}
@@ -75,7 +75,7 @@ In the following, we consider a birth cohort born in year $c$ with
 time scale $t$, which could be either age or calendar period.
 Consider a system with three live states and a death state, where
 state 1 is for never smokers, state 2 is for current smokers, state 3
-is for former smokers, and state 4 represents death. Let
+is for former smokers, state 4 represents reclassified smokers, and state 5 represents death. Let
 $\alpha_{ij}(t)$ be the transition intensities from state $i$ to state
 $j$ at time $t$. As a model simplification, we ignore any dependence
 of the transitions intensities on duration in state, such that the
@@ -184,7 +184,7 @@ This result generalises the approach used by
 \citet{harris_cigarette_1983} to adjust for the effect of differential
 survival when reconstructing smoking prevalence.
 
-The reclassification of former smokers as never smokers is awkward, as the observed and modelled states are no longer one-to-one: observed never smokers comprise never and reclassified smokers in the underlying model\footnote{A simple solution would be to use a different notation for the observed and modelled states.}. This requires that we differentiate between the observed states and the states for the underlying model; for observed never smokers, we define $Q_{11}(s,t;\tau)=P_{11}(s,t)\frac{P_{1\K}(t,\tau)}{P_{1\K}(s,\tau)}+P_{14}(s,t)\frac{P_{4\K}(t,\tau)}{P_{1\K}(s,\tau)}$. Similarly, the uptake of smoking can now be measured in terms of those who have never been smokers, which is the modelled $\alpha_{12}(s)$, but which is not observable, or in terms of those who presently identify as never being smokers, which would be expressed as $\alpha_{12}(s)\frac{P_{11}(0,s)}{P_{11}(0,s)+P_{14}(0,s)}$. At younger ages, $P_{14}(0,s)$ will be small and the two transition rates will be similar.
+The reclassification of former smokers as never smokers is awkward, as the observed and modelled states are no longer one-to-one: observed never smokers comprise never and reclassified smokers in the underlying model. This requires that we differentiate between the observed states and the states for the underlying model; for observed never smokers, the probability is the sum of probabilities for never smokers and reclassified smokers (that is, $Q_{11}(s,t;\tau)+Q_{14}(s,t;\tau)$). The uptake of smoking can now be measured in terms of those who have never been smokers, which is the modelled $\alpha_{12}(s)$, but which is not observable, or in terms of those who presently identify as never being smokers, which would be expressed as $\alpha_{12}(s)\frac{P_{11}(0,s)}{P_{11}(0,s)+P_{14}(0,s)}$. At younger ages, $P_{14}(0,s)$ will be small and the two transition rates will be similar.
 
 Given values of the transition intensities $\alpha_{ij}(t)$, we are
 able to calculate $P_{ij}(s,t)$, $P_{i\K}(t,\tau)$,
@@ -210,8 +210,14 @@ for never, current and former smokers.
 
 The current smoking history generator is also based on unweighted
 survey data. Survey weights and any other survey data, such as primary
-sampling unit, would improve the validity of the estimates. It is
-unclear whether such information are available from all of the NHIS surveys.
+sampling unit, would improve the validity of the estimates. 
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.6\textwidth]{nhis_density.jpg}    
+  \caption{Density plot for respondents to the NHIS surveys, by age and calendar period, 1965--2011.}
+  \label{fig:nhis}
+\end{figure}
 
 
 \section{Likelihood}
@@ -338,6 +344,35 @@ the rates across the Lexis diagram using tensor product splines.
 The specification of the transition rates across the Lexis diagram
 will also allow for the investigation of future smoking prevalence
 under different scenarios for future smoking uptake and cessation rates.
+
+
+\section{Results}
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.6\textwidth]{coplot-1.pdf}    
+  \caption{Smoking initiation rates, NHIS, males}
+  \label{fig:init-males}
+\end{figure}
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.6\textwidth]{coplot-2.pdf}    
+  \caption{Smoking initiation rates, NHIS, females}
+  \label{fig:init-males}
+\end{figure}
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.6\textwidth]{coplot-3.pdf}    
+  \caption{Smoking cessation rates, NHIS, males}
+  \label{fig:init-males}
+\end{figure}
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.6\textwidth]{coplot-4.pdf}    
+  \caption{Smoking cessation rates, NHIS, females}
+  \label{fig:init-males}
+\end{figure}
+
 
 
 \bibliography{research-prostate-2012_zotexo_}
