@@ -59,6 +59,142 @@ if (doOnce <- FALSE) {
     save(smokingList,mortList,subset.lookupList,file="~/Documents/clients/ted/smokingList-20140528.RData")
 }
 
+## p-splines estimation
+require(parallel)
+require(purged)
+require(survival)
+load(file="~/src/R/purged/test/smokingList-20140528.RData")
+strata <- transform(expand.grid(from=seq(1890,1990,by=5),sex=1:2),
+                    to=from+4)
+smokingSex <- sapply(smokingList,function(obj) obj$sex)
+smokingCohort <- sapply(smokingList,function(obj) obj$cohort)
+stratifiedData <- lapply(1:nrow(strata), function(i) {
+    smokingList[strata$sex[i]==smokingSex &
+                smokingCohort>=strata$from[i] & smokingCohort<=strata$to[i]]
+})
+optimObjective <- function(stratum,sp01=0.1,sp12=1,hessian=FALSE) {
+    nterm01 <- nterm12 <- 8
+    objective <- function(beta) {
+        int01 <- beta[i <- 1]
+        int12 <- beta[i <- i+1]
+        beta01 <- beta[(i+1):(i <- i+nterm01+2)]
+        beta12 <- beta[(i+1):(i <- i+nterm12+2)]
+        beta20 <- beta[i <- i+1]
+        ## print(beta,digits=3)
+        do.call("sum",
+                mclapply(stratum, function(obj) {
+                    smoking <- obj$smoking
+                    mort <- obj$mort
+                    .Call("gsl_main2ReclassifiedPS",
+                          smoking$smkstat - 1, 
+                          as.integer(smoking$recall),
+                          smoking$agestart,
+                          smoking$agequit,
+                          smoking$age, # age observed
+                          smoking$freq, # frequency (as double)
+                          int01,
+                          int12,
+                          10, 60, nterm01, attr(pspline(c(10,60),nterm=nterm01),"pparm"), sp01,
+                          10, 40, nterm12, attr(pspline(c(10,30),nterm=nterm12),"pparm"), sp12,
+                          beta01,
+                          beta12,
+                          beta20,
+                          mort$age,
+                          mort$Never,
+                          mort$Current,
+                          mort$Former,
+                          FALSE, # debug
+                          package="purged")$pnegll
+                }, mc.cores=2))
+    }
+    ##objective(init)
+    optim(init,objective,control=list(trace=1,maxit=300),hessian=hessian)
+}
+init <- c(-3,
+          -4,
+          rep(0.1,8+2),
+          rep(0.1,8+2),
+          log(0.01))
+## init <- c(-3.038, -4.129, -1.668, 0.824, 1.144, 1.249, -0.756, 1.274, 
+##           0.523, 0.365, -1.022, -2.354, 0.133, 0.161, 0.101, 0.012, 0.107, 
+##           -0.261, 0.03, 0.035, 0.306, 0.18, -4.315)
+##options(width=200)
+(fit1890.1 <- optimObjective(stratifiedData[[1]],sp01=0.01,sp12=1))
+
+(fit1890.2 <- optimObjective(stratifiedData[[1+21]],sp01=0.01,sp12=1))
+
+## display results
+require(survival)
+predict.pspline <- 
+function (object, newx, ...) 
+{
+    if (missing(newx)) 
+        return(object)
+    a <- c(list(x = newx, penalty = FALSE), attributes(object)[c("intercept", "Boundary.knots","nterm")])
+    do.call("pspline", a)
+}
+display <- function(fit,df01=10,df12=10) {
+    beta <- fit$par
+    int01 <- beta[i <- 1]
+    int12 <- beta[i <- i+1]
+    beta01 <- c(int01,beta[(i+1):(i <- i+df01)])
+    beta12 <- c(int12,beta[(i+1):(i <- i+df12)])
+    beta20 <- beta[i <- i+1]
+    s01 <- pspline(c(10,60),nterm=df01-2)
+    s12 <- pspline(c(10,40),nterm=df12-2)
+    if (length(fit$hessian)>0) {
+        sigma <- solve(fit$hessian)
+        sigma01 <- sigma[i <- c(1,3:(2+df01)),i]
+        i <-  c(2,(3+df01):(2+df01+df12))
+        sigma12 <- sigma[i,i]
+        sigma20 <- sigma[7,7]
+    }
+    sfun <- function(obj,centre) {
+        nsref <- predict(obj,centre)
+        fun <- function(t,beta) apply(predict(obj,t),1,
+                                      function(row) exp(beta[1]+sum((row-nsref) * beta[-1])))
+        fun
+    }
+    nsXfun <- function(obj,centre) {
+        nsref <- predict(obj,centre)
+        fun <- function(t) apply(predict(obj,t),1,
+                                      function(row) c(1,row-nsref))
+        fun
+    }
+    alpha01 <- sfun(s01,centre=20)
+    alpha12 <- sfun(s12,centre=40)
+    X01 <- nsXfun(s01,centre=20)
+    X12 <- nsXfun(s12,centre=40)
+    ages=seq(0,100,length=301)
+    a01 <- alpha01(ages,beta01)
+    a12 <- alpha12(ages,beta12)
+    if (length(fit$hessian)>0) {
+        sd01 <- as.vector(sqrt(colSums(X01(ages)* (sigma01 %*% X01(ages)))))
+        matplot(ages,a01*exp(cbind(0,-1.96*sd01,1.96*sd01)),type="l",xlim=c(0,80),
+                xlab="Age (years)", ylab="Hazard", main="Smoking initiation")
+        a12 <- alpha12(ages,beta12)
+        sd12 <- as.vector(sqrt(colSums(X12(ages)* (sigma12 %*% X12(ages)))))
+        matplot(ages,a12*exp(cbind(0,-1.96*sd12,1.96*sd12)),type="l",xlim=c(0,80),
+                xlab="Age (years)", ylab="Hazard", ylim=c(0,min(1,max(a12))),
+                main="Smoking cessation")
+        alpha20 <- list(est=exp(beta20),lower=exp(beta20-1.96*sqrt(sigma20)),
+                        upper=exp(beta20+1.96*sqrt(sigma20)))
+        cat(sprintf("alpha20=%f (95%% CI: %f, %f)\n",alpha20$est,alpha20$lower,alpha20$upper))
+        invisible(list(ages=ages,a01=a01,sd01=sd01,a12=a12,sd12=sd12,alpha20=alpha20))
+    } else {
+        plot(ages,a01,type="l",xlim=c(0,80),
+             xlab="Age (years)", ylab="Hazard", main="Smoking initiation")
+        plot(ages,a12,type="l",xlim=c(0,80),
+             xlab="Age (years)", ylab="Hazard", ylim=c(0,min(1,max(a12))),
+             main="Smoking cessation")
+    }
+}
+par(mfrow=c(2,2))
+##debug(display)
+display(fit1890.1)
+display(fit1890.2)
+
+
 
 library(Rmpi)
 library(snow)
@@ -197,13 +333,13 @@ stopCluster(cl)
 
 ## Display the estimated transition intensities
 require(splines)
-display <- function(fit) {
+display <- function(fit,df01=2,df12=2) {
     beta <- fit$par
     sigma <- solve(fit$hessian)
     int01 <- beta[i <- 1]
     int12 <- beta[i <- i+1]
-    beta01 <- c(int01,beta[(i+1):(i <- i+2)])
-    beta12 <- c(int12,beta[(i+1):(i <- i+2)])
+    beta01 <- c(int01,beta[(i+1):(i <- i+df01)])
+    beta12 <- c(int12,beta[(i+1):(i <- i+df12)])
     beta20 <- beta[i <- i+1]
     knots01 <- c(10,20,30)
     knots12 <- c(20,40,60)
@@ -651,13 +787,15 @@ system.time(print(1-100960.6/objective(init <- c(-3,-4,1,-1,1,-1,log(0.01))))) #
 ##       		  SEXP _mu2,
 ##       		  SEXP _debug)
 require(survival)
-objectivePS <- function(beta) {
+objectivePS <- function(beta,df01=10L,df12=10L) {
     int01 <- beta[i <- 1]
     int12 <- beta[i <- i+1]
-    beta01 <- beta[(i+1):(i <- i+10)]
-    beta12 <- beta[(i+1):(i <- i+10)]
+    beta01 <- beta[(i+1):(i <- i+df01)]
+    beta12 <- beta[(i+1):(i <- i+df12)]
     ## beta20 <- log(0.01)
     beta20 <- beta[i <- i+1]
+    nterm01 <- as.integer(df01 - 2L)
+    nterm12 <- as.integer(df12 - 2L)
     print(beta)
     .Call("gsl_main2ReclassifiedPS",
           test$finalState, # finalState
@@ -668,8 +806,8 @@ objectivePS <- function(beta) {
           test$freq, # freq = frequency (as double)
           int01,
           int12,
-          10, 60, 8L, attr(pspline(c(10,60),nterm=8),"pparm"), 1,
-          10, 30, 8L, attr(pspline(c(10,30),nterm=8),"pparm"), 1,
+          10, 60, nterm01, attr(pspline(c(10,60),nterm=nterm01),"pparm"), 1,
+          10, 30, nterm12, attr(pspline(c(10,30),nterm=nterm12),"pparm"), 1,
           beta01,
           beta12,
           beta20,
@@ -682,14 +820,10 @@ objectivePS <- function(beta) {
 }
 init <- c(-3,
           -4,
-          rep(0.1,8+2),
+          rnorm(10),
           rep(0.1,8+2),
           log(0.01))
 system.time(print(objectivePS(init)))
-
-require(survival)
-
-
 
 
 require(parallel)

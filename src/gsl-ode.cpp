@@ -619,10 +619,12 @@ namespace {
 		       nterm12
 		       );
 
-    gsl_vector_Rprintf(ps01->knots);
-    Rprintf("\n");
-    gsl_vector_Rprintf(ps01->knots);
-    Rprintf("\n");
+    if (debug) {
+      gsl_vector_Rprintf(ps01->knots);
+      Rprintf("\n");
+      gsl_vector_Rprintf(ps12->knots);
+      Rprintf("\n");
+    }
 
     double maxage = ages0[ages0.size()-1]+0.5;
     if (debug)
@@ -639,12 +641,25 @@ namespace {
     P_ijs.clear();
     // without storing intermediate results, 10000 ODEs took ~20 sec
 
-    double sum_negll = 0.0;
+    double negll = 0.0;
     for (int i = 0; i< finalState.size(); ++i) 
-      sum_negll += negllReclassified(finalState[i], time1[i], time2[i], time3[i], d, freq[i], recall[i]);
+      negll += negllReclassified(finalState[i], time1[i], time2[i], time3[i], d, freq[i], recall[i]); // add negative components
 
-    //sum_negll -= beta01 * pmatrix01 * beta01;
-    //sum_negll -= beta12 * pmatrix12 * beta12;
+    gsl_vector *v01;
+    double penalty01=0.0;
+    v01 = gsl_vector_alloc(beta01->size);
+    gsl_blas_dgemv(CblasNoTrans, 1.0, pmatrix01, beta01, 0.0, v01);
+    gsl_blas_ddot(beta01,v01,&penalty01);
+    gsl_vector_free(v01);
+    double pnegll = negll + penalty01 * sp01/2.0; // add positive penalty
+
+    gsl_vector *v12;
+    double penalty12=0.0;
+    v12 = gsl_vector_alloc(beta12->size);
+    gsl_blas_dgemv(CblasNoTrans, 1.0, pmatrix12, beta12, 0.0, v12);
+    gsl_blas_ddot(beta12,v12,&penalty12);
+    gsl_vector_free(v12);
+    pnegll += penalty12 * sp12/2.0; // add positive penalty
 
     if (debug) {
       Rprintf("Size of Pij map = %i\n",P_ijs.size());
@@ -687,8 +702,32 @@ namespace {
     gsl_interp_accel_free (acc2);
     gsl_odeiv2_driver_free (d);
 
-    return wrap(sum_negll);
+    return Rcpp::List::create(Rcpp::Named("pnegll")=wrap(pnegll),
+			      Rcpp::Named("negll")=wrap(negll));
   }
 
+
+  // RcppExport SEXP test_gsl() {
+
+  //   gsl_matrix *m;
+  //   m = gsl_matrix_alloc(2,2);
+  //   gsl_matrix_set(m,0,0,1.0);
+  //   gsl_matrix_set(m,1,0,2.0);
+  //   gsl_matrix_set(m,0,1,3.0);
+  //   gsl_matrix_set(m,1,1,4.0);
+  //   gsl_vector *b;
+  //   b = gsl_vector_alloc(2);
+  //   gsl_vector_set(b,0,1.0);
+  //   gsl_vector_set(b,1,2.0);
+  //   gsl_vector *v;
+  //   double penalty=0.0;
+  //   v = gsl_vector_alloc(b->size);
+  //   gsl_blas_dgemv(CblasNoTrans, 1.0, m, b, 0.0, v);
+  //   gsl_blas_ddot(b,v,&penalty);
+  //   gsl_vector_free(v);
+  //   gsl_vector_free(b);
+  //   gsl_matrix_free(m);
+  //   return(wrap(penalty));
+  // }
   
 }
