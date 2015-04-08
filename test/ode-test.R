@@ -72,9 +72,10 @@ stratifiedData <- lapply(1:nrow(strata), function(i) {
     smokingList[strata$sex[i]==smokingSex &
                 smokingCohort>=strata$from[i] & smokingCohort<=strata$to[i]]
 })
-optimObjective <- function(stratum,sp01=0.1,sp12=1,hessian=FALSE) {
+
+optimObjective <- function(stratum,sp01=0.1,sp12=1,hessian=FALSE,maxit=1500) {
     nterm01 <- nterm12 <- 8
-    objective <- function(beta) {
+    pnegll <- function(beta) {
         int01 <- beta[i <- 1]
         int12 <- beta[i <- i+1]
         beta01 <- beta[(i+1):(i <- i+nterm01+2)]
@@ -107,21 +108,93 @@ optimObjective <- function(stratum,sp01=0.1,sp12=1,hessian=FALSE) {
                           package="purged")$pnegll
                 }, mc.cores=2))
     }
+    negll <- function(beta) {
+        int01 <- beta[i <- 1]
+        int12 <- beta[i <- i+1]
+        beta01 <- beta[(i+1):(i <- i+nterm01+2)]
+        beta12 <- beta[(i+1):(i <- i+nterm12+2)]
+        beta20 <- beta[i <- i+1]
+        ## print(beta,digits=3)
+        do.call("sum",
+                mclapply(stratum, function(obj) {
+                    smoking <- obj$smoking
+                    mort <- obj$mort
+                    .Call("gsl_main2ReclassifiedPS",
+                          smoking$smkstat - 1, 
+                          as.integer(smoking$recall),
+                          smoking$agestart,
+                          smoking$agequit,
+                          smoking$age, # age observed
+                          smoking$freq, # frequency (as double)
+                          int01,
+                          int12,
+                          10, 60, nterm01, attr(pspline(c(10,60),nterm=nterm01),"pparm"), sp01,
+                          10, 40, nterm12, attr(pspline(c(10,30),nterm=nterm12),"pparm"), sp12,
+                          beta01,
+                          beta12,
+                          beta20,
+                          mort$age,
+                          mort$Never,
+                          mort$Current,
+                          mort$Former,
+                          FALSE, # debug
+                          package="purged")$negll
+                }, mc.cores=2))
+    }
     ##objective(init)
-    optim(init,objective,control=list(trace=1,maxit=300),hessian=hessian)
+    out <- optim(init,pnegll,control=list(trace=1,maxit=maxit),hessian=hessian)
+    if (hessian) {
+        coef <- out$par
+        ## Hl <- numDeriv::hessian(llike,coef)
+        ##if (any(is.na(Hl)))
+        Hl <- optimHess(coef, negll)
+        Hinv <- solve(out$hessian)
+        trace <- -sum(diag(Hinv %*% Hl))
+        out$negll <- negll(coef)
+        out$trace <- trace
+    }
+    return(out)
 }
 init <- c(-3,
           -4,
           rep(0.1,8+2),
           rep(0.1,8+2),
           log(0.01))
-## init <- c(-3.038, -4.129, -1.668, 0.824, 1.144, 1.249, -0.756, 1.274, 
-##           0.523, 0.365, -1.022, -2.354, 0.133, 0.161, 0.101, 0.012, 0.107, 
-##           -0.261, 0.03, 0.035, 0.306, 0.18, -4.315)
 ##options(width=200)
-(fit1890.1 <- optimObjective(stratifiedData[[1]],sp01=0.01,sp12=1))
+init <- c(-1.9526, -5.1064, -1.2735, 1.8114, 1.7937, 0.4667, -0.3944, 
+0.1983, -0.7213, -1.7211, -2.2572, -3.2255, 0.1865, 0.2426, 0.2853, 
+0.4466, 0.5477, 0.4909, 0.0343, -0.0821, 0.1152, 0.3945, -3.7474
+)
+(fit1890.1 <- optimObjective(stratifiedData[[1]],sp01=0.1,sp12=1,maxit=50,hessian=TRUE))
+
+diag(solve(fit1890.1$hessian))
+
+getStatifiedData <- function(cohort,sex) {
+    offset <- 21
+    index <- (cohort-1885)/5
+    stratifiedData[index+offset*(sex==2)]
+}
+
+(fit1890.1 <- optimObjective(stratifiedData[[1]],sp01=0.1,sp12=1,maxit=50,hessian=TRUE))
+
+
+stratifiedData[[21]]
 
 (fit1890.2 <- optimObjective(stratifiedData[[1+21]],sp01=0.01,sp12=1))
+
+
+
+gcv<-function(optim.fit){
+  like <- optim.fit@like
+  Hl <- numDeriv::hessian(like,coef(pstpm2.fit))
+  if (any(is.na(Hl)))
+      Hl <- optimHess(coef(pstpm2.fit), like)
+  Hinv <- -vcov(pstpm2.fit)
+  trace <- sum(diag(Hinv%*%Hl))
+  l <- like(coef(pstpm2.fit))
+  structure(-l+trace,negll=-l,trace=trace)
+}
+
 
 ## display results
 require(survival)
