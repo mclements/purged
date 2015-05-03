@@ -141,7 +141,7 @@ optimObjective <- function(stratum,sp01=0.1,sp12=1,hessian=FALSE) {
                 }, mc.cores=2))
     }
     ## return(pnegll(init))
-    out <- nlminb(init,pnegll,control=list(trace=1,rel.tol=1e-8))
+    out <- nlminb(init,pnegll,control=list(trace=1,rel.tol=1e-7))
     out$negll <- negll # function 
     out$pnegll <- pnegll # function
     out$coefficients <- out$par
@@ -159,14 +159,15 @@ init <- c(-3,
           rep(0.1,5+2),
           rep(0.1,5+2),
           log(0.01))
-##options(width=200)
-## init <- c(-1.9526, -5.1064, -1.2735, 1.8114, 1.7937, 0.4667, -0.3944, 
-## 0.1983, -0.7213, -1.7211, -2.2572, -3.2255, 0.1865, 0.2426, 0.2853, 
-## 0.4466, 0.5477, 0.4909, 0.0343, -0.0821, 0.1152, 0.3945, -3.7474
-## )
-system.time(fit1890.1 <- optimObjective(stratifiedData[[1]],sp01=0.1,sp12=1,hessian=FALSE))
+init <- c(-2.2084, -5.2397, 1.7865, 3.9082, 4.2282, 2.6938, 1.7596, 2.0776, 
+          0.8403, -0.5627, -0.9299, -1.105, -0.6869, 0.1301, 1.1833, 2.0894, 
+          -4.3141)
+system.time(fit1890.1 <- optimObjective(stratifiedData[[1]],sp01=0.1,sp12=1,hessian=TRUE))
 str(fit1890.1)
-with(fit1890.1, pnegll(init))
+with(fit1890.1, pnegll(par))
+with(fit1890.1, dput(round(par,4)))
+
+
 
 diag(solve(fit1890.1$hessian))
 ##
@@ -313,8 +314,9 @@ optimObjective <- function(stratum,init,hessian=FALSE) {
     }
     return(out)
 }
-##system.time(out <- mclapply(1, function(i) {cat("Object",i,"\n"); try(optimObjective(stratifiedData[[i]], inits[[i]]))}, mc.cores=2))
-##save(out,file="~/src/R/purged/test/out-20140528_B.RData")
+##system.time(out <- mclapply(1:42, function(i) {cat("Object",i,"\n"); try(optimObjective(stratifiedData[[i]], inits[[i]]))}, mc.cores=2))
+##save(out,file="~/src/R/purged/test/out-20150502-full.RData")
+load("~/src/R/purged/test/out-20150502-full.RData")
 
 ## continued from above
 predictPij <- function(obj,beta) {
@@ -345,11 +347,60 @@ predictPij <- function(obj,beta) {
     }
 
 with(list(age=10:80), {
-    P <- matrix(predictPij(list(mort=stratifiedData[[1]][[3]]$mort,smoking=expand.grid(smkstat=1:4,age=age)),inits[[1]]),ncol=4,byrow=TRUE)
+    P <- matrix(predictPij(list(mort=stratifiedData[[1]][[3]]$mort,smoking=expand.grid(smkstat=1:4,age=age)),out[[1]]$par),ncol=4,byrow=TRUE)
     P <- t(apply(P,1,function(row) row/sum(row)))
+    P <- cbind(P[,1]+P[,4],P)
     matplot(age,P,type="l")
-    legend("topright",legend=c("Never (actual)","Current","Former","Reclassified"),col=1:4,lty=1:4,bty="n")
+    legend("topright",legend=c("Never (self-report)","Never (actual)","Current","Former","Reclassified"),col=1:5,lty=1:5,bty="n")
 })
+
+## delta method
+require(numdelta)
+males <- mapply(function(obj,data)
+                {
+                    obj$Sigma <- solve(obj$hessian)
+                    obj$data <- data
+                    structure(obj,class="purged")
+                },
+                out[1:21],
+                stratifiedData[1:21],
+                SIMPLIFY=FALSE)
+vcov.purged <- function(obj) obj$Sigma
+coef.purged <- function(obj) obj$par
+`coef<-.purged` <- function(object,value) { object$par <- value; object }
+## trans <- logit <- function(x) log(x/(1-x))
+## itrans <- expit <- function(x) 1/(1+exp(-x))
+trans <- function(x) log(-log(x))
+itrans <- function(x) exp(-exp(x))
+## itrans(trans(.9))
+FUN <- function(object,age=10:80)
+    trans(predictPij(list(mort=object$data[[3]]$mort,smoking=expand.grid(smkstat=3,age=age)),object$par))
+with(list(age=10:80), {
+    pred1 <- predictnl(males[[1]],FUN)
+    matplot(age,itrans(cbind(pred1$fit,confint(pred1))),type="l")
+})
+
+## Use a log-log transformation for confidence intervals for the predicted probabilities
+## Assessed using sampling from the posterior
+require(mvtnorm)
+sims <- lapply(1:100, function(i) {
+    object <- males[[1]]
+    object$par <- rmvnorm(1,object$par,object$Sigma)
+    FUN(object)
+})
+sims2 <- do.call("rbind",sims)
+sum2 <- t(apply(sims2,2,quantile,c(0.025,0.975)))
+with(list(age=10:80), {
+    pred1 <- predictnl(males[[1]],FUN)
+    matplot(age,itrans(cbind(pred1$fit,confint(pred1))),type="l")
+    lines(age,itrans(sum2[,1]),lwd=3)
+    lines(age,itrans(sum2[,2]),lwd=3)
+})
+
+
+## Can we smooth the different results?
+## Should we smooth the parameters, the rates or the predicted probabilities?
+coefs <- sapply(out[1:21], function(obj) obj$par)
 
 
 getStratifiedData <- function(cohort,sex) {
