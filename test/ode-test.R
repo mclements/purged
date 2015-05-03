@@ -73,8 +73,8 @@ stratifiedData <- lapply(1:nrow(strata), function(i) {
                 smokingCohort>=strata$from[i] & smokingCohort<=strata$to[i]]
 })
 
-optimObjective <- function(stratum,sp01=0.1,sp12=1,hessian=FALSE,maxit=1500) {
-    nterm01 <- nterm12 <- 8
+optimObjective <- function(stratum,sp01=0.1,sp12=1,hessian=FALSE) {
+    nterm01 <- nterm12 <- 5
     pnegll <- function(beta) {
         int01 <- beta[i <- 1]
         int12 <- beta[i <- i+1]
@@ -95,8 +95,8 @@ optimObjective <- function(stratum,sp01=0.1,sp12=1,hessian=FALSE,maxit=1500) {
                           smoking$freq, # frequency (as double)
                           int01,
                           int12,
-                          10, 60, nterm01, attr(pspline(c(10,60),nterm=nterm01),"pparm"), sp01,
-                          10, 40, nterm12, attr(pspline(c(10,30),nterm=nterm12),"pparm"), sp12,
+                          10, 40, nterm01, attr(pspline(c(10,40),nterm=nterm01),"pparm"), sp01,
+                          10, 70, nterm12, attr(pspline(c(10,70),nterm=nterm12),"pparm"), sp12,
                           beta01,
                           beta12,
                           beta20,
@@ -114,7 +114,6 @@ optimObjective <- function(stratum,sp01=0.1,sp12=1,hessian=FALSE,maxit=1500) {
         beta01 <- beta[(i+1):(i <- i+nterm01+2)]
         beta12 <- beta[(i+1):(i <- i+nterm12+2)]
         beta20 <- beta[i <- i+1]
-        ## print(beta,digits=3)
         do.call("sum",
                 mclapply(stratum, function(obj) {
                     smoking <- obj$smoking
@@ -128,8 +127,8 @@ optimObjective <- function(stratum,sp01=0.1,sp12=1,hessian=FALSE,maxit=1500) {
                           smoking$freq, # frequency (as double)
                           int01,
                           int12,
-                          10, 60, nterm01, attr(pspline(c(10,60),nterm=nterm01),"pparm"), sp01,
-                          10, 40, nterm12, attr(pspline(c(10,30),nterm=nterm12),"pparm"), sp12,
+                          10, 40, nterm01, attr(pspline(c(10,40),nterm=nterm01),"pparm"), sp01,
+                          10, 70, nterm12, attr(pspline(c(10,70),nterm=nterm12),"pparm"), sp12,
                           beta01,
                           beta12,
                           beta20,
@@ -141,45 +140,228 @@ optimObjective <- function(stratum,sp01=0.1,sp12=1,hessian=FALSE,maxit=1500) {
                           package="purged")$negll
                 }, mc.cores=2))
     }
-    ##objective(init)
-    out <- optim(init,pnegll,control=list(trace=1,maxit=maxit),hessian=hessian)
+    ## return(pnegll(init))
+    out <- nlminb(init,pnegll,control=list(trace=1,rel.tol=1e-8))
+    out$negll <- negll # function 
+    out$pnegll <- pnegll # function
+    out$coefficients <- out$par
     if (hessian) {
-        coef <- out$par
+        out$hessian <- optimHess(coef(out), pnegll)
         ## Hl <- numDeriv::hessian(llike,coef)
-        ##if (any(is.na(Hl)))
-        Hl <- optimHess(coef, negll)
+        Hl <- optimHess(coef(out), negll)
         Hinv <- solve(out$hessian)
-        trace <- -sum(diag(Hinv %*% Hl))
-        out$negll <- negll(coef)
-        out$trace <- trace
+        out$trace <- -sum(diag(Hinv %*% Hl))
     }
     return(out)
 }
 init <- c(-3,
           -4,
-          rep(0.1,8+2),
-          rep(0.1,8+2),
+          rep(0.1,5+2),
+          rep(0.1,5+2),
           log(0.01))
 ##options(width=200)
-init <- c(-1.9526, -5.1064, -1.2735, 1.8114, 1.7937, 0.4667, -0.3944, 
-0.1983, -0.7213, -1.7211, -2.2572, -3.2255, 0.1865, 0.2426, 0.2853, 
-0.4466, 0.5477, 0.4909, 0.0343, -0.0821, 0.1152, 0.3945, -3.7474
-)
-(fit1890.1 <- optimObjective(stratifiedData[[1]],sp01=0.1,sp12=1,maxit=50,hessian=TRUE))
+## init <- c(-1.9526, -5.1064, -1.2735, 1.8114, 1.7937, 0.4667, -0.3944, 
+## 0.1983, -0.7213, -1.7211, -2.2572, -3.2255, 0.1865, 0.2426, 0.2853, 
+## 0.4466, 0.5477, 0.4909, 0.0343, -0.0821, 0.1152, 0.3945, -3.7474
+## )
+system.time(fit1890.1 <- optimObjective(stratifiedData[[1]],sp01=0.1,sp12=1,hessian=FALSE))
+str(fit1890.1)
+with(fit1890.1, pnegll(init))
 
 diag(solve(fit1890.1$hessian))
+##
+## coef.nlminb <- coef(fit1890.1)
+coef.nlminb <- c(-2.30426533639024, -5.59189828926138, 1.7591741291095, 3.94699944347449, 
+4.05923551226308, 2.39407490385323, 1.39327811089255, 1.92043040616437, 
+1.37925846582657, 0.705860430956955, 0.138782801435078, -0.970265049666329, 
+0.0159183612281592, 0.0379401144182051, 0.100106028532845, 0.263734898066751, 
+0.388138157647989, 0.201325379289236, -0.059788133365412, -0.13877113685924, 
+-0.0194342640363815, 0.44876575129484, -4.71103159635782)
+with(fit1890.1, pnegll(coef.nlminb))
 
-getStatifiedData <- function(cohort,sex) {
+
+## test MPI
+library(Rmpi)
+library(snow)
+library(parallel)
+library(purged)
+## set up nodes and cores
+NumberOfNodes <- 1
+CoresPerNode <- 2
+mc.cores <- max(1, NumberOfNodes*CoresPerNode-1) # minus one for master
+cl <- makeMPIcluster(mc.cores)
+cat(sprintf("Running with %d workers\n", length(cl)))
+load(file="~/src/R/purged/test/smokingList-20140528.RData")
+load("~/src/R/purged/test/out-20140528.RData") # previous run
+strata <- transform(expand.grid(from=seq(1890,1990,by=5),sex=1:2),
+                    to=from+4)
+smokingSex <- sapply(smokingList,function(obj) obj$sex)
+smokingCohort <- sapply(smokingList,function(obj) obj$cohort)
+stratifiedData <- lapply(1:nrow(strata), function(i) {
+    smokingList[strata$sex[i]==smokingSex &
+                smokingCohort>=strata$from[i] & smokingCohort<=strata$to[i]]
+})
+inits <- lapply(out, function(obj) obj$par)
+optimObjective <- function(stratum,init,hessian=FALSE) {
+    objective <- function(beta) {
+        int01 <- beta[i <- 1]
+        int12 <- beta[i <- i+1]
+        beta01 <- beta[(i+1):(i <- i+2)]
+        beta12 <- beta[(i+1):(i <- i+2)]
+        beta20 <- beta[i <- i+1]
+        do.call("sum",
+                lapply(stratum, function(obj) {
+                    smoking <- obj$smoking
+                    mort <- obj$mort
+                    .Call("gsl_main2Reclassified",
+                          smoking$smkstat - 1, 
+                          as.integer(smoking$recall),
+                          smoking$agestart,
+                          smoking$agequit,
+                          smoking$age, # age observed
+                          smoking$freq, # frequency (as double)
+                          int01,
+                          int12,
+                          c(10,20,30), # knots01
+                          c(20,40,60), # knots12
+                          beta01,
+                          beta12,
+                          beta20,
+                          mort$age,
+                          mort$Never,
+                          mort$Current,
+                          mort$Former,
+                          FALSE, # debug
+                          package="purged")
+                }))
+    }
+    ## init <- c(-1.91166383109674, -4.86139268487933, 3.84976690180782, 0.445314035540679, 
+    ## -0.344483039469035, 0.979805469221358, -3.53232595501467)
+    ## out <- nlminb(init,objective,control=list(iter.max=5))
+    out <- nlminb(init,objective)
+    out$objective <- objective
+    out$coefficients <- out$par
+    if (hessian) {
+        out$hessian <- optimHess(coef(out), objective)
+    }
+    return(out)
+}
+clusterCall(cl, function() {
+    library(purged)
+    NULL })
+out <- clusterMap(cl, optimObjective, stratifiedData[1], inits[1])
+save(out,file="~/src/R/purged/test/out-20140528_B.RData")
+stopCluster(cl)
+mpi.quit()
+
+## ns models
+refresh
+library(parallel)
+library(purged)
+load(file="~/src/R/purged/test/smokingList-20140528.RData")
+load("~/src/R/purged/test/out-20140528.RData") # previous run
+strata <- transform(expand.grid(from=seq(1890,1990,by=5),sex=1:2),
+                    to=from+4)
+smokingSex <- sapply(smokingList,function(obj) obj$sex)
+smokingCohort <- sapply(smokingList,function(obj) obj$cohort)
+stratifiedData <- lapply(1:nrow(strata), function(i) {
+    smokingList[strata$sex[i]==smokingSex &
+                smokingCohort>=strata$from[i] & smokingCohort<=strata$to[i]]
+})
+inits <- lapply(out, function(obj) obj$par)
+optimObjective <- function(stratum,init,hessian=FALSE) {
+    objective <- function(beta) {
+        int01 <- beta[i <- 1]
+        int12 <- beta[i <- i+1]
+        beta01 <- beta[(i+1):(i <- i+2)]
+        beta12 <- beta[(i+1):(i <- i+2)]
+        beta20 <- beta[i <- i+1]
+        do.call("sum",
+                lapply(stratum, function(obj) {
+                    smoking <- obj$smoking
+                    mort <- obj$mort
+                    .Call("gsl_main2Reclassified",
+                          smoking$smkstat - 1, 
+                          as.integer(smoking$recall),
+                          smoking$agestart,
+                          smoking$agequit,
+                          smoking$age, # age observed
+                          smoking$freq, # frequency (as double)
+                          int01,
+                          int12,
+                          c(10,20,30), # knots01
+                          c(20,40,60), # knots12
+                          beta01,
+                          beta12,
+                          beta20,
+                          mort$age,
+                          mort$Never,
+                          mort$Current,
+                          mort$Former,
+                          TRUE, # debug
+                          package="purged")
+                }))
+    }
+    ## init <- c(-1.91166383109674, -4.86139268487933, 3.84976690180782, 0.445314035540679, 
+    ## -0.344483039469035, 0.979805469221358, -3.53232595501467)
+    ## out <- nlminb(init,objective,control=list(iter.max=5))
+    out <- nlminb(init,objective,control=list(trace=1))
+    out$objective <- objective
+    out$coefficients <- out$par
+    if (hessian) {
+        out$hessian <- optimHess(coef(out), objective)
+    }
+    return(out)
+}
+##system.time(out <- mclapply(1, function(i) {cat("Object",i,"\n"); try(optimObjective(stratifiedData[[i]], inits[[i]]))}, mc.cores=2))
+##save(out,file="~/src/R/purged/test/out-20140528_B.RData")
+
+## continued from above
+predictPij <- function(obj,beta) {
+        int01 <- beta[i <- 1]
+        int12 <- beta[i <- i+1]
+        beta01 <- beta[(i+1):(i <- i+2)]
+        beta12 <- beta[(i+1):(i <- i+2)]
+        beta20 <- beta[i <- i+1]
+        smoking <- obj$smoking
+        mort <- obj$mort
+        .Call("gsl_predReclassified",
+                      max(smoking$age),
+                          smoking$smkstat - 1, 
+                          smoking$age, # age observed
+                          int01,
+                          int12,
+                          c(10,20,30), # knots01
+                          c(20,40,60), # knots12
+                          beta01,
+                          beta12,
+                          beta20,
+                          mort$age,
+                          mort$Never,
+                          mort$Current,
+                          mort$Former,
+                          TRUE, # debug
+                          package="purged")
+    }
+
+with(list(age=10:80), {
+    P <- matrix(predictPij(list(mort=stratifiedData[[1]][[3]]$mort,smoking=expand.grid(smkstat=1:4,age=age)),inits[[1]]),ncol=4,byrow=TRUE)
+    P <- t(apply(P,1,function(row) row/sum(row)))
+    matplot(age,P,type="l")
+    legend("topright",legend=c("Never (actual)","Current","Former","Reclassified"),col=1:4,lty=1:4,bty="n")
+})
+
+
+getStratifiedData <- function(cohort,sex) {
     offset <- 21
     index <- (cohort-1885)/5
     stratifiedData[index+offset*(sex==2)]
 }
-
+##
 (fit1890.1 <- optimObjective(stratifiedData[[1]],sp01=0.1,sp12=1,maxit=50,hessian=TRUE))
-
-
+##
+##
 stratifiedData[[21]]
-
 (fit1890.2 <- optimObjective(stratifiedData[[1+21]],sp01=0.01,sp12=1))
 
 
@@ -266,6 +448,8 @@ par(mfrow=c(2,2))
 ##debug(display)
 display(fit1890.1)
 display(fit1890.2)
+
+
 
 
 
