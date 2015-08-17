@@ -6,10 +6,13 @@
 \usepackage[margin=2.5cm]{geometry} % wide margins
 \usepackage{amsmath}
 
+\usepackage{amsthm}
+\newtheorem{theorem}{Theorem}
+
 \bibliographystyle{apalike}  
 
 \title{Multi-state Markov model of smoking behaviour: estimation of
-  uptake and cessation from multiple surveys}
+  uptake and cessation from multiple surveys [Penalized purged Markov models]}
 \author{Mark~Clements, Theodore~Holford}
 
 \usepackage{listings,fancyvrb}
@@ -69,44 +72,85 @@ allows for estimation of ever smoker reclassification from multiple
 surveys, and can readily be used to calculate smoking projections
 under different scenarios for future smoking uptake and cessation. 
 
-\section{Underlying multi-state model for smoking behaviour}
+
+\section{Introduction}
+
+Motivation: fit a model for US smoking patterns based on survey data. 
+
+Issues: differential survival due to smoking status \citep{harris_cigarette_1983}; mis-classification of former smokers as never smokers \citep{van_de_mheen_reported_1994}.
+
+Related literature: Titman (2011) suggested using B-splines to represent log-hazards for modeling continuous time Markov models for panel data. Titman further suggested calculating transition probability matrix from time $s$ to time $t$ using probability matrices from time $t_0$ and using matrix inversion, such that $\bm{P}(s,t)=\bm{P}^{-1}(t_0,s)\bm{P}(t_0,t)$.
+
+\citet{hoem_purged_1969} introduced purged Markov processes, where some states are not observable. The use of purged Markov processes for modeling retrospective data has received relatively little attention. Notable exceptions include: Andersen and Green (1985: TODO) on the incidence of diabetes where observations are conditional on not emigrating; 
+
+Outline: smoothing using natural splines and P-splines; ordinary differential equations; purged Markov processes.
+
+\section{Underlying multi-state models for smoking behaviour}
 
 In the following, we consider a birth cohort born in year $c$ with
 time scale $t$, which could be either age or calendar period.
-Consider a system with three live states and a death state, where
+Consider a system with four live states and a death state, where
 state 1 is for never smokers, state 2 is for current smokers, state 3
-is for former smokers, state 4 represents reclassified smokers, and state 5 represents death. Let
+is for former smokers, state 4 represents reclassified smokers (that is, former smokers who report themselves as being never smokers), and state 0 represents death. Let
 $\alpha_{ij}(t)$ be the transition intensities from state $i$ to state
 $j$ at time $t$. As a model simplification, we ignore any dependence
 of the transitions intensities on duration in state, such that the
-model has one primary time scale and is a \emph{continuous time multistate Markov
+model has one primary time scale and is a \emph{continuous time multi-state Markov
   model}.
 
-\begin{figure}[h]
+\begin{figure}[ht]
 \begin{center}
 \begin{tikzpicture}[->,bend
-  angle=20,semithick,>=stealth',font=\sffamily]
+  angle=20,semithick,>=stealth']%,font=\sffamily]
+\pgfsetmatrixcolumnsep{15mm}
+\matrix [matrix of nodes,row sep=16mm,ampersand replacement=\&]
+{
+|(Never)| 1: Never \& |(Current)| 2: Current  \&
+|(Former)| 3: Former \\ %\& |(Reclassified)| 4: Reclassified  \\
+ \& \& |(Death)| 0: Death \\
+};
+\begin{scope}[every node/.style={midway,auto}]
+\draw (Never) to node {$\alpha_{12}(t)$} (Current);
+\draw (Current) to node {$\alpha_{23}(t)$} (Former);
+%\draw (Former) to  node {$\alpha_{34}(t)$} (Reclassified);
+\draw (Never) to [bend right=5] node [anchor=north east] {$\alpha_{10}(t)$} (Death);
+\draw (Current) to node {$\alpha_{20}(t)$} (Death);
+\draw (Former) to node {$\alpha_{30}(t)$} (Death);
+%\draw (Reclassified) to  node {$\alpha_{40}(t)$} (Death);
+\end{scope}
+\end{tikzpicture}
+\end{center}
+  \caption{Model A for smoking behaviour}
+  \label{fig:baseline}
+\end{figure}
+
+\begin{figure}[ht]
+\begin{center}
+\begin{tikzpicture}[->,bend
+  angle=20,semithick,>=stealth']%,font=\sffamily]
 \pgfsetmatrixcolumnsep{15mm}
 \matrix [matrix of nodes,row sep=16mm,ampersand replacement=\&]
 {
 |(Never)| 1: Never \& |(Current)| 2: Current  \&
 |(Former)| 3: Former \& |(Reclassified)| 4: Reclassified  \\
- \& \& |(Death)| 5: Death \\
+ \& \& |(Death)| 0: Death \\
 };
 \begin{scope}[every node/.style={midway,auto}]
 \draw (Never) to node {$\alpha_{12}(t)$} (Current);
 \draw (Current) to node {$\alpha_{23}(t)$} (Former);
 \draw (Former) to  node {$\alpha_{34}(t)$} (Reclassified);
-\draw (Never) to [bend right=5] node [anchor=north east] {$\alpha_{15}(t)$} (Death);
-\draw (Current) to node {$\alpha_{25}(t)$} (Death);
-\draw (Former) to node {$\alpha_{35}(t)$} (Death);
-\draw (Reclassified) to  node {$\alpha_{45}(t)$} (Death);
+\draw (Never) to [bend right=5] node [anchor=north east] {$\alpha_{10}(t)$} (Death);
+\draw (Current) to node {$\alpha_{20}(t)$} (Death);
+\draw (Former) to node {$\alpha_{30}(t)$} (Death);
+\draw (Reclassified) to  node {$\alpha_{40}(t)$} (Death);
 \end{scope}
 \end{tikzpicture}
 \end{center}
-  \caption{Underlying model for smoking behaviour}
-  \label{fig:baseline}
+  \caption{Model B for smoking behaviour}
+  \label{fig:baselineB}
 \end{figure}
+
+
 
 Let the probability of moving from state $i$ at time $s$ to state $j$
 at time $t$ be $P_{ij}(s,t)$, and define
@@ -130,6 +174,8 @@ functions for the transition intensities, rather than
 piecewise-constant functions or non-parametric baseline hazard
 functions that are typically used for multi-state Markov models.
 
+
+
 \section{Survey sampling with recall of behaviour}
 
 If a survey is undertaken at time $\tau$
@@ -139,11 +185,11 @@ intensity $\lambda_{ij}(t;\tau)$ from state $i$ to state $j$ at time $t$, with o
 
 % conditional on observation at time $\tau$ 
 
-\begin{figure}[h]
+\begin{figure}[ht]
   
 \begin{center}
 \begin{tikzpicture}[->,bend
-  angle=20,semithick,>=stealth',font=\sffamily]
+  angle=20,semithick,>=stealth'] %,font=\sffamily]
 \pgfsetmatrixcolumnsep{15mm}
 \matrix [matrix of nodes,row sep=8mm,ampersand replacement=\&]
 {
@@ -193,6 +239,30 @@ $i,j,s,t$ and $\tau$.  In particular, given the intensities for the
 underlying model, we are able to calculate the transition intensities
 and transition probabilities for the observed survey data, which supports estimation of the underlying intensities using the likelihood for the observed data.
 
+\subsection{Some theoretical considerations}
+
+The proposed Model A is progressive and is a Coxian phase-type distribution with nonhomogeneous (time-dependent) transition intensities.
+
+\begin{theorem}
+For a purged Markov model, consider an observation that starts in state $u_1$ at time $t_1$ and is observed in state $v_I$ at time $\tau$ with intervals $[t_i,t_{i+1})$ being in state $u_i$ at time $t_i$ and state $v_i$ at time $(t_{i+1}-)$ with an observed transition from state $v_i$ to state $u_{i+1}$ at time $t_{i+1}$. Then the density of the observation is
+
+\begin{align*} 
+\prod_{i=1}^{I-1} \left\{Q_{u_i,v_i}(t_i,t_{i+1};\tau) \lambda_{v_i,u_{i+1}}(t_{i+1};\tau)\right\}Q_{u_I,v_I}(t_I,\tau;\tau)
+= \frac{\prod_{i=1}^{I-1} \left\{P_{u_i,v_i}(t_i,t_{i+1}) \alpha_{v_i,u_{i+1}}(t_{i+1})\right\}P_{u_I,v_I}(t_I,\tau)}{P_{u_1,K}(t_1,\tau)}
+\end{align*}
+\end{theorem}
+
+\begin{proof}
+\begin{align*} 
+& \prod_{i=1}^{I-1} \left\{Q_{u_i,v_i}(t_i,t_{i+1};\tau) \lambda_{v_i,u_{i+1}}(t_{i+1};\tau)\right\}Q_{u_I,v_I}(t_I,\tau;\tau)\\
+= & \prod_{i=1}^{I-1} \left\{P_{u_i,v_i}(t_i,t_{i+1})\frac{P_{v_i,K}(t_{i+1},\tau)}{P_{u_i,K}(t_{i},\tau)} \alpha_{v_i,u_{i+1}}(t_{i+1})\frac{P_{u_{i+1},K}(t_{i+1},\tau)}{P_{v_i,K}(t_{i+1},\tau)}\right\}\frac{P_{u_I,v_I}(t_I,\tau)}{P_{u_I,K}(t_{I},\tau)} \\
+ = & \prod_{i=1}^{I-1} \left\{P_{u_i,v_i}(t_i,t_{i+1})\alpha_{v_i,u_{i+1}}(t_{i+1})\right\} 
+\frac{P_{u_I,v_I}(t_I,\tau)}{P_{u_I,K}(t_{I},\tau)}
+ \prod_{i=1}^{I-1} \frac{P_{u_{i+1},K}(t_{i+1},\tau)}{P_{u_i,K}(t_{i},\tau)} \\
+ = & \prod_{i=1}^{I-1} \left\{P_{u_i,v_i}(t_i,t_{i+1})\alpha_{v_i,u_{i+1}}(t_{i+1})\right\} 
+\frac{P_{u_I,v_I}(t_I,\tau)}{P_{u_1,K}(t_{1},\tau)}
+\end{align*}
+\end{proof} 
 
 \section{Data sources}
 
@@ -212,7 +282,7 @@ The current smoking history generator is also based on unweighted
 survey data. Survey weights and any other survey data, such as primary
 sampling unit, would improve the validity of the estimates. 
 
-\begin{figure}[h]
+\begin{figure}[ht]
   \centering
   \includegraphics[width=0.6\textwidth]{nhis_density.jpg}    
   \caption{Density plot for respondents to the NHIS surveys, by age and calendar period, 1965--2011.}
@@ -232,7 +302,7 @@ The likelihood component $L$ for an observed never smoker is, given the underlyi
 probability for a never smoker and the probability for a reclassified smoker, such that
 \begin{align*}
   %\label{eq:Lnever}
-L_1(\tau) & = Q_{11}(0,\tau;\tau) \\
+L_1(\tau) & = Q_{11}(0,\tau;\tau)+Q_{14}(0,\tau;\tau) \\
 & = P_{11}(0,\tau)\frac{P_{1\K}(\tau,\tau)}{P_{1\K}(0,\tau)} +P_{14}(0,\tau)\frac{P_{4\K}(\tau,\tau)}{P_{1\K}(0,\tau)} 
 = \frac{P_{11}(0,\tau)+P_{14}(0,\tau)}{P_{1\K}(0,\tau)}  
 \end{align*}
@@ -301,10 +371,10 @@ available data. Then the total likelihood is equal to
 
 \section{Estimation}
 
-The mortality intensity functions $\alpha_{15}(t)$, $\alpha_{25}(t)$
-and $\alpha_{35}(t)$ were available. We also assumed that the
+The mortality intensity functions $\alpha_{10}(t)$, $\alpha_{20}(t)$
+and $\alpha_{30}(t)$ were available. We also assumed that the
 mortality rates for reclassified smokers were the same as for never
-smokers (that is, $\alpha_{45}(t)=\alpha_{15}(t)$). We estimated
+smokers (that is, $\alpha_{40}(t)=\alpha_{10}(t)$). We estimated
 parameters for $\alpha_{12}(t)$ and $\alpha_{23}(t)$ would be
 estimated. Moreover, for multiple surveys, parameters for
 $\alpha_{34}(t)$ was estimated.
@@ -348,34 +418,35 @@ under different scenarios for future smoking uptake and cessation rates.
 
 \section{Results}
 
-\begin{figure}[h]
+\begin{figure}[ht]
   \centering
   \includegraphics[width=0.6\textwidth]{coplot-1.pdf}    
   \caption{Smoking initiation rates, NHIS, males}
   \label{fig:init-males}
 \end{figure}
-\begin{figure}[h]
+\begin{figure}[ht]
   \centering
   \includegraphics[width=0.6\textwidth]{coplot-2.pdf}    
   \caption{Smoking initiation rates, NHIS, females}
-  \label{fig:init-males}
+  \label{fig:init-females}
 \end{figure}
-\begin{figure}[h]
+\begin{figure}[ht]
   \centering
   \includegraphics[width=0.6\textwidth]{coplot-3.pdf}    
   \caption{Smoking cessation rates, NHIS, males}
-  \label{fig:init-males}
+  \label{fig:cess-males}
 \end{figure}
-\begin{figure}[h]
+\begin{figure}[ht]
   \centering
   \includegraphics[width=0.6\textwidth]{coplot-4.pdf}    
   \caption{Smoking cessation rates, NHIS, females}
-  \label{fig:init-males}
+  \label{fig:cess-females}
 \end{figure}
 
 
 
 \bibliography{research-prostate-2012_zotexo_}
+% \bibliography{mylib}
 
 \end{document}
 

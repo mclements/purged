@@ -1,3 +1,4 @@
+refresh
 ## read in the data
 if (doOnce <- FALSE) {
     setwd("~/Documents/clients/ted")
@@ -58,7 +59,6 @@ if (doOnce <- FALSE) {
     }
     save(smokingList,mortList,subset.lookupList,file="~/Documents/clients/ted/smokingList-20140528.RData")
 }
-
 ## p-splines estimation
 require(parallel)
 require(purged)
@@ -72,6 +72,172 @@ stratifiedData <- lapply(1:nrow(strata), function(i) {
     smokingList[strata$sex[i]==smokingSex &
                 smokingCohort>=strata$from[i] & smokingCohort<=strata$to[i]]
 })
+
+test <- function(callName="gsl_main2ReclassifiedPS",init,stratum,sp01=0.1,sp12=1) {
+    obj <- stratum[[1]]
+    nterm01 <- nterm12 <- 5
+    P <- function(beta) {
+        int01 <- beta[i <- 1]
+        int12 <- beta[i <- i+1]
+        beta01 <- beta[(i+1):(i <- i+nterm01+2)]
+        beta12 <- beta[(i+1):(i <- i+nterm12+2)]
+        beta20 <- beta[i <- i+1]
+        ## do.call("sum",
+        ##         mclapply(stratum, function(obj) {
+                    smoking <- obj$smoking[1:5,]
+                    mort <- obj$mort
+                    .Call(callName,
+                          as.integer(smoking$smkstat - 1), 
+                          as.integer(smoking$recall),
+                          smoking$agestart,
+                          smoking$agequit,
+                          smoking$age, # age observed
+                          smoking$freq, # frequency (as double)
+                          int01,
+                          int12,
+                          10, 40, as.integer(nterm01), attr(pspline(c(10,40),nterm=nterm01),"pparm"), sp01,
+                          10, 70, as.integer(nterm12), attr(pspline(c(10,70),nterm=nterm12),"pparm"), sp12,
+                          beta01,
+                          beta12,
+                          beta20,
+                          mort$age,
+                          mort$Never,
+                          mort$Current,
+                          mort$Former,
+                          TRUE, # debug
+                          package="purged")
+                ## }, mc.cores=2))
+    }
+    ## return(pnegll(init))
+    return(P(init))
+}
+init <- c(-3,
+          -4,
+          rep(0.1,5+2),
+          rep(0.1,5+2),
+          log(0.01))
+init <- c(-2.2084, -5.2397, 1.7865, 3.9082, 4.2282, 2.6938, 1.7596, 2.0776, 
+          0.8403, -0.5627, -0.9299, -1.105, -0.6869, 0.1301, 1.1833, 2.0894, 
+          -4.3141)
+system.time(temp3 <- test("gsl_main2ReclassifiedPS2",init,stratifiedData[[10]],sp01=0.1,sp12=1))
+system.time(temp2 <- test("gsl_main2ReclassifiedPS",init,stratifiedData[[10]],sp01=0.1,sp12=1))
+temp2$negll
+temp3$negll
+head(stratifiedData[[10]][[1]]$smoking)
+
+## Reimplement the example in R
+require(splines)
+require(deSolve)
+require(survival)
+parms <- list(beta=init)
+d <- stratifiedData[[1]][[1]]
+mort <- d$mort
+mu0 <- splinefun(mort$age, mort$Never)
+mu1 <- splinefun(mort$age, mort$Current)
+mu2 <- splinefun(mort$age, mort$Former)
+predict.pspline <-
+function (object, newx, ...) 
+{
+    if (missing(newx)) 
+        return(object)
+    a <- c(list(x = newx, penalty = FALSE), attributes(object)[c("degree", "df", 
+        "Boundary.knots", "intercept", "nterm", "eps", "method")])
+    newobj <- do.call("pspline", a)
+    newobj
+}
+nsfun <- function(knots,centre=knots[1]) {
+    nsobj <- ns(knots,df=length(knots)-1)
+    nsref <- predict(nsobj,centre)
+    fun <- function(t,beta) apply(predict(nsobj,t),1,
+                                  function(row) exp(beta[1]+sum((row-nsref) * beta[-1])))
+    fun
+}
+psfun <- function(Boundary.knots,nterm,centre=Boundary.knots[1]) {
+    obj <- pspline(Boundary.knots,nterm=nterm)
+    ref <- as.vector(predict(obj,centre))
+    ## function(newx) predict(obj,c(Boundary.knots[1]+1.2345e-7,newx))[-1,,drop=FALSE]
+    fun <- function(newx,beta) apply(predict(obj,newx),1,
+                                  function(row) exp(beta[1]+sum((row-ref) * beta[-1])))
+    fun
+}
+##undebug(psfun)
+alpha01 <- psfun(c(10,40),5,20)
+alpha12 <- psfun(c(10,70),5,40)
+##
+with(list(a=1), {
+    nterm01 <- nterm12 <- 5
+    int01 <- parms$beta[i <- 1]
+    int12 <- parms$beta[i <- i+1]
+    beta01 <- parms$beta[(i+1):(i <- i+nterm01+2)]
+    beta12 <- parms$beta[(i+1):(i <- i+nterm12+2)]
+    beta23 <- parms$beta[i <- i+1]
+    t <- c(0,seq(.5,71.5,by=1))
+    a01 <- alpha01(t,c(int01,beta01))
+    a12 <- alpha12(t,c(int12,beta12))
+    a23 <- exp(beta23)
+    par(mfrow=1:2)
+    plot(t,a01,type="l")
+    plot(t,a12,type="l")
+})
+##
+bounds <- function(t,lower,upper) pmax(pmin(t,upper),lower)
+Never <- 1; Current <- 2; Former <- 3; Reclassified <- 4; Death <- 5
+odefunc <- function(t,y,parms) {
+    nterm01 <- nterm12 <- 5
+    int01 <- parms$beta[i <- 1]
+    int12 <- parms$beta[i <- i+1]
+    beta01 <- parms$beta[(i+1):(i <- i+nterm01+2)]
+    beta12 <- parms$beta[(i+1):(i <- i+nterm12+2)]
+    beta23 <- parms$beta[i <- i+1]
+    a01 <- alpha01(t,c(int01,beta01))
+    a12 <- alpha12(t,c(int12,beta12))
+    a23 <- exp(beta23)
+    m0 <- mu0(bounds(t,0.5,99.5))
+    m1 <- mu1(bounds(t,0.5,99.5))
+    m2 <- mu2(bounds(t,0.5,99.5))
+    list(c(-y[Never]*a01,
+           -y[Current]*(m1-m0+a12)+y[Never]*a01,
+           -y[Former]*(m2-m0+a23)+y[Current]*a12,
+           y[Former]*a23,y[Current]*(m1-m0)+y[Former]*(m2-m0)),
+         c(a01=a01,a12=a12,a23=a23,m0=m0,m1=m1,m2=m2))
+}     
+Ps <- function(i,t,parms,size=5) {
+    y <- rep(0,size)
+    y[i] <- 1
+    ode(y=y, t=t, parms, func = odefunc, rtol=1e-8, atol=1e-8)[-1,2:6]
+}
+require(abind)
+out <- do.call("abind",c(lapply(1:5,function(i) Ps(i,c(0,seq(.5,71.5,by=1)), parms)),list(along=3)))
+out <- aperm(out,3:1)
+log(sum(out[1,c(1,4),71])/sum(out[1,1:4,71]))*80
+log(out[1,2,71]/sum(out[1,1:4,71]))*81
+log(out[1,3,72]/sum(out[1,1:4,72]))*8
+
+temp <- temp3$P
+dim(temp) <- c(5,5,ncol(temp))
+v <- temp[,,26+1]; 68*log((v[1]+v[1+(4-1)*5])/(v[1]+v[1+(2-1)*5]+v[1+(3-1)*5]+v[1+(4-1)*5]))
+mat <- solve(temp[,,17+1]) %*% temp[,,26+1]
+v <- temp[,,26+1]; 68*log((v[1]+v[1+(4-1)*5])/(v[1]+v[1+(2-1)*5]+v[1+(3-1)*5]+v[1+(4-1)*5]))
+
+temp <- temp3$P
+dim(temp) <- c(5,5,ncol(temp))
+temp <- zapsmall(temp) # and recalculate
+temp <- apply(temp,3,function(m) cbind(m[,-5],1-rowSums(m[,-5])))
+dim(temp) <- c(5,5,ncol(temp))
+inverses <- apply(temp,3,solve)
+dim(temp2$inverse) <- dim(inverses) <- c(5,5,dim(temp)[3])
+inverses[,,1]/temp2$inverse[,,1]
+inverses[,,10]/temp2$inverse[,,10]
+
+fun <- function(P,s,t) solve(P[,,s],P[,,t])
+fun(temp,10,60)
+fun2 <- function(P,inverses,s,t) inverses[,,s] %*% P[,,t]
+fun2(temp,inverses,10,60)
+fun(temp,10,60)/fun2(temp,inverses,10,60)
+fun3 <- function(P,inverses,s,t,i,j) sum(inverses[i,,s] * P[,j,t])
+fun3(temp,inverses,10,60,1,4)
+
+
 
 optimObjective <- function(stratum,sp01=0.1,sp12=1,hessian=FALSE) {
     nterm01 <- nterm12 <- 5
@@ -166,8 +332,6 @@ system.time(fit1890.1 <- optimObjective(stratifiedData[[1]],sp01=0.1,sp12=1,hess
 str(fit1890.1)
 with(fit1890.1, pnegll(par))
 with(fit1890.1, dput(round(par,4)))
-
-
 
 diag(solve(fit1890.1$hessian))
 ##
@@ -270,6 +434,22 @@ stratifiedData <- lapply(1:nrow(strata), function(i) {
                 smokingCohort>=strata$from[i] & smokingCohort<=strata$to[i]]
 })
 inits <- lapply(out, function(obj) obj$par)
+
+## range for the smoking initiation and cessation times
+sapply(stratifiedData,
+       function(obj) range(sapply(obj, function(obji) with(obji$smoking,agestart[recall==1])),na.rm=TRUE))
+sapply(stratifiedData,
+       function(obj) range(sapply(obj, function(obji) with(obji$smoking,agequit[recall==1])),na.rm=TRUE))
+lapply(stratifiedData,
+       function(obj) {
+           data <- do.call("rbind", lapply(obj, function(obji) subset(obji$smoking,recall==1)))
+           i <- rep(1:nrow(data), data$freq)
+           list(start=table(data$agestart[i],useNA="no"),
+                knots1=quantile(data$agestart[i],c(0.025,0.5,0.975),na.rm=TRUE),
+                quit=table(data$agequit[i],useNA="no"),
+                knots2=quantile(data$agequit[i],c(0.025,0.5,0.975),na.rm=TRUE))
+       })
+
 optimObjective <- function(stratum,init,hessian=FALSE) {
     objective <- function(beta) {
         int01 <- beta[i <- 1]
@@ -318,7 +498,8 @@ optimObjective <- function(stratum,init,hessian=FALSE) {
 ##save(out,file="~/src/R/purged/test/out-20150502-full.RData")
 load("~/src/R/purged/test/out-20150502-full.RData")
 
-## continued from above
+## Continuing from above
+load("~/src/R/purged/test/out-20150502-full.RData")
 predictPij <- function(obj,beta) {
         int01 <- beta[i <- 1]
         int12 <- beta[i <- i+1]
@@ -354,6 +535,41 @@ with(list(age=10:80), {
     legend("topright",legend=c("Never (self-report)","Never (actual)","Current","Former","Reclassified"),col=1:5,lty=1:5,bty="n")
 })
 
+require(akima)
+require(dplyr)
+prev <- with(list(age=10:50),
+             lapply(1:42, function(i) {
+                 P <- matrix(predictPij(list(mort=stratifiedData[[i]][[3]]$mort,smoking=expand.grid(smkstat=1:4,age=age)),out[[i]]$par),ncol=4,byrow=TRUE)
+                 P <- t(apply(P,1,function(row) row/sum(row)))
+                 data.frame(cohort=stratifiedData[[i]][[3]]$cohort,ages=age,sex=ifelse(i<=21,1,2),current=P[,2],former=P[,3])
+             }))
+prev.1 <- do.call("rbind",prev) %>% mutate(year = cohort+ages) %>% filter(sex==1 & year<=2010)
+fld <- with(prev.1, interp(x = ages, y = year, z = log(current)))
+fld$z <- exp(fld$z)
+pdf("~/Downloads/us-smoking-current-males.pdf")
+filled.contour(x = fld$x,
+               y = fld$y,
+               z = fld$z,
+               main="Current smoking prevalence, males",
+               xlab="Age (years)", ylab="Calendar period",
+               color.palette =
+                 colorRampPalette(c("white","blue")))
+dev.off()
+prev.2 <- do.call("rbind",prev) %>% mutate(year = cohort+ages) %>% filter(sex==2 & year<=2010)
+fld <- with(prev.2, interp(x = ages, y = year, z = log(current)))
+fld$z <- exp(fld$z)
+pdf("~/Downloads/us-smoking-current-females.pdf")
+filled.contour(x = fld$x,
+               y = fld$y,
+               z = fld$z,
+               main="Current smoking prevalence, females",
+               xlab="Age (years)", ylab="Calendar period",
+               color.palette =
+                 colorRampPalette(c("white","blue")))
+dev.off()
+
+
+
 ## delta method
 require(numdelta)
 males <- mapply(function(obj,data)
@@ -376,11 +592,12 @@ itrans <- function(x) exp(-exp(x))
 FUN <- function(object,age=10:80)
     trans(predictPij(list(mort=object$data[[3]]$mort,smoking=expand.grid(smkstat=3,age=age)),object$par))
 with(list(age=10:80), {
-    pred1 <- predictnl(males[[1]],FUN)
+    pred1 <- numdelta:::predictnl(males[[1]],FUN)
     matplot(age,itrans(cbind(pred1$fit,confint(pred1))),type="l")
 })
 
 ## Use a log-log transformation for confidence intervals for the predicted probabilities
+## (a logit transform did not perform as well as the log-log transform)
 ## Assessed using sampling from the posterior
 require(mvtnorm)
 sims <- lapply(1:100, function(i) {
@@ -397,10 +614,32 @@ with(list(age=10:80), {
     lines(age,itrans(sum2[,2]),lwd=3)
 })
 
-
 ## Can we smooth the different results?
 ## Should we smooth the parameters, the rates or the predicted probabilities?
 coefs <- sapply(out[1:21], function(obj) obj$par)
+## The issue here is that not all of the cohorts have sensible estimates for parameters outside of the observed data (although such parameters should also have large standard errors)
+ses <- sapply(males, function(obj) sqrt(diag(obj$Sigma))) # oops
+
+## How about a quick way to pull out the transition intensities?
+require(rstpm2)
+load("~/src/R/purged/test/out-20150502-full.RData")
+lambdaij <- function(obj,age=seq(10,80,length=301),beta=NULL) {
+    beta <- obj$par
+    int01 <- beta[i <- 1]
+    int12 <- beta[i <- i+1]
+    beta01 <- beta[(i+1):(i <- i+2)]
+    beta12 <- beta[(i+1):(i <- i+2)]
+    beta20 <- beta[i <- i+1]
+    data <- data.frame(age=age)
+    ns01 <- model.matrix(~1+nsx(age,knots=20,centre=20,Boundary.knots=c(10,30)),data)
+    ns12 <- model.matrix(~1+nsx(age,knots=40,centre=40,Boundary.knots=c(20,60)),data)
+    data.frame(age=age,
+          alpha01=exp(ns01 %*% c(int01,beta01)),
+          alpha12=exp(ns12 %*% c(int12,beta12)))
+    }
+with(lambdaij(out[[1]]), matplot(age,cbind(alpha01,alpha12),type="l"))
+
+
 
 
 getStratifiedData <- function(cohort,sex) {
@@ -439,21 +678,21 @@ function (object, newx, ...)
     a <- c(list(x = newx, penalty = FALSE), attributes(object)[c("intercept", "Boundary.knots","nterm")])
     do.call("pspline", a)
 }
-display <- function(fit,df01=10,df12=10) {
+display <- function(fit,df01=7,df12=7) {
     beta <- fit$par
     int01 <- beta[i <- 1]
     int12 <- beta[i <- i+1]
     beta01 <- c(int01,beta[(i+1):(i <- i+df01)])
     beta12 <- c(int12,beta[(i+1):(i <- i+df12)])
     beta20 <- beta[i <- i+1]
-    s01 <- pspline(c(10,60),nterm=df01-2)
-    s12 <- pspline(c(10,40),nterm=df12-2)
+    s01 <- pspline(c(10,40),nterm=df01-2)
+    s12 <- pspline(c(10,60),nterm=df12-2)
     if (length(fit$hessian)>0) {
         sigma <- solve(fit$hessian)
         sigma01 <- sigma[i <- c(1,3:(2+df01)),i]
         i <-  c(2,(3+df01):(2+df01+df12))
         sigma12 <- sigma[i,i]
-        sigma20 <- sigma[7,7]
+        sigma20 <- sigma[7,7] # ??
     }
     sfun <- function(obj,centre) {
         nsref <- predict(obj,centre)
@@ -688,11 +927,14 @@ display <- function(fit,df01=2,df12=2) {
     invisible(list(ages=ages,a01=a01,sd01=sd01,a12=a12,sd12=sd12,alpha20=alpha20))
 }
 par(mfrow=c(2,2))
+display(out[[5]])
+display(out[[21+5]])
 
 ## display results from HPC
 ## system("ssh mc2495@omega.hpc.yale.edu `cd ~/src/R/purged/test; ./submit_cluster.sh`")
 ## system("scp mc2495@omega.hpc.yale.edu:~/src/R/purged/test/out-20140528.RData ~/src/R/purged/test/")
 load("~/src/R/purged/test/out-20140528.RData")
+load("~/src/R/purged/test/out-20150502-full.RData")
 load(file="~/src/R/purged/test/smokingList-20140528.RData")
 strata <- transform(expand.grid(from=seq(1890,1990,by=5),sex=1:2),
                     to=from+4)
@@ -712,8 +954,69 @@ summ <- do.call("rbind",
                                a12=a12,
                                lower12=a12*exp(-1.96*sd12),
                                upper12=a12*exp(1.96*sd12)))))
+summ.1 <- subset(summ,sex==1)
+summ.2 <- subset(summ,sex==2)
 summ.1 <- subset(summ,sex==1 & cohort<=1950)
 summ.2 <- subset(summ,sex==2 & cohort<=1950)
+
+require(lattice)
+require(mgcv)
+d <- mutate(summ.1,year=cohort+ages,loga01=log(a12)) %>% filter(year<=2010 & ages>=10)
+fit1 <- gam(loga01~s(ages,year),data=d,sp=1e-2); fit1$sp
+plot(fit1, pers=TRUE)
+plot(fit1,se=FALSE)
+pred1 <- data.frame(d, pred=predict(fit1,type="response"))
+
+library(akima)
+
+# interpolation
+d <- mutate(summ.1,year=cohort+ages) %>% filter(year<=2010 & ages>=10 & ages<95)
+fld <- with(subset(d, ages<45), interp(x = ages, y = year, z = log(a01)))
+fld$z <- exp(fld$z)
+pdf("~/Downloads/us-smoking-uptake-males.pdf")
+filled.contour(x = fld$x,
+               y = fld$y,
+               z = fld$z,
+               main="Smoking uptake rates, males",
+               xlab="Age (years)", ylab="Calendar period",
+               color.palette =
+                 colorRampPalette(c("white","blue")))
+dev.off()
+fld <- with(d, interp(x = ages, y = year, z = log(a12)))
+## fld$z <- exp(fld$z)
+pdf("~/Downloads/us-smoking-cessation-males-log.pdf")
+filled.contour(x = fld$x,
+               y = fld$y,
+               z = fld$z,
+               main="Smoking cessation log(rates), males",
+               color.palette =
+                 colorRampPalette(c("white", "blue")))
+dev.off()
+
+d <- mutate(summ.2,year=cohort+ages) %>% filter(year<=2010 & ages>=10 & ages<95)
+fld <- with(subset(d, ages<45), interp(x = ages, y = year, z = log(a01)))
+fld$z <- exp(fld$z)
+pdf("~/Downloads/us-smoking-uptake-females.pdf")
+filled.contour(x = fld$x,
+               y = fld$y,
+               z = fld$z,
+               main="Smoking uptake rates, females",
+               xlab="Age (years)", ylab="Calendar period",
+               color.palette =
+                 colorRampPalette(c("white","blue")))
+dev.off()
+fld <- with(d, interp(x = ages, y = year, z = log(a12)))
+##fld$z <- exp(fld$z)
+pdf("~/Downloads/us-smoking-cessation-females-log.pdf")
+filled.contour(x = fld$x,
+               y = fld$y,
+               z = fld$z,
+               main="Smoking cessation log(rates), females",
+               color.palette =
+                 colorRampPalette(c("white", "blue")))
+dev.off()
+
+                    
 pdf("~/src/R/purged/test/coplot-1.pdf")
 coplot(one ~ ages | factor(cohort),
          data=summ.1,

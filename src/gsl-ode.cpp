@@ -293,12 +293,13 @@ namespace { // anonymous
   }
 
   // template<class T> T bounds(T x, T lo, T hi) { return x<lo ? lo : (x>hi ? hi : x); } 
+  inline
   double bounds(double x, double lo, double hi) { return x<lo ? lo : (x>hi ? hi : x); } 
 
 
   // define the ODE
   int
-  funcReclassified (double t, const double y[], double f[],
+  funcReclassifiedOLD (double t, const double y[], double f[],
 		    void *params)
   {
     double alpha01, alpha12, alpha20, mu0, mu1, mu2;
@@ -313,6 +314,26 @@ namespace { // anonymous
     f[Current] = alpha01*y[Never]-(alpha12+mu1)*y[Current];
     f[Former] = alpha12*y[Current]-(alpha20+mu2)*y[Former];
     f[Reclassified] = alpha20*y[Former]-mu0*y[Reclassified];
+    return GSL_SUCCESS;
+  }
+
+  // define the ODE
+  int
+  funcReclassified (double t, const double y[], double f[],
+		    void *params)
+  {
+    double alpha01, alpha12, alpha20, mu0, mu1, mu2;
+    Param* P = static_cast<Param*>(params);
+    alpha01 = exp(P->int01 + P->s01->calc(t, P->beta01));
+    alpha12 = exp(P->int12 + P->s12->calc(t, P->beta12));
+    alpha20 = exp(P->beta20);
+    mu0 = gsl_spline_eval(P->spline0, bounds(t,0.5,P->maxage), P->acc0);
+    mu1 = gsl_spline_eval(P->spline1, bounds(t,0.5,P->maxage), P->acc1);
+    mu2 = gsl_spline_eval(P->spline2, bounds(t,0.5,P->maxage), P->acc2);
+    f[Never] = -(alpha01)*y[Never];
+    f[Current] = alpha01*y[Never]-(alpha12+mu1-mu0)*y[Current];
+    f[Former] = alpha12*y[Current]-(alpha20+mu2-mu0)*y[Former];
+    f[Reclassified] = alpha20*y[Former];
     return GSL_SUCCESS;
   }
 
@@ -660,10 +681,10 @@ namespace { // anonymous
     
     bool debug = Rcpp::as<bool>(_debug);
 
-    RcppGSL::vector<int> recall = _recall; 
+    RcppGSL::vector<int> recall = _recall, finalState = _finalState; 
 
     RcppGSL::vector<double> 
-      finalState = _finalState,
+      // finalState = _finalState,
       time1=_time1,
       time2=_time2,
       time3=_time3,
@@ -749,8 +770,11 @@ namespace { // anonymous
     // without storing intermediate results, 10000 ODEs took ~20 sec
 
     double negll = 0.0;
-    for (size_t i = 0; i< finalState.size(); ++i) 
-      negll += negllReclassified(finalState[i], time1[i], time2[i], time3[i], d, freq[i], recall[i]); // add negative components
+    for (size_t i = 0; i< finalState.size(); ++i) {
+      double negllComponent = negllReclassified(finalState[i], time1[i], time2[i], time3[i], d, freq[i], recall[i]); // add negative components
+      if (debug) Rprintf("ll=%g; ",-negllComponent);
+      negll += negllComponent;
+    }
 
     gsl_vector *v01;
     double penalty01=0.0;
@@ -810,6 +834,259 @@ namespace { // anonymous
     gsl_odeiv2_driver_free (d);
 
     return Rcpp::List::create(Rcpp::Named("pnegll")=wrap(pnegll),
+			      Rcpp::Named("negll")=wrap(negll));
+  }
+
+
+  std::map<P_ij_key,double> P_ijs2;
+
+  double
+  P_ij2(int i, int j, double s, double t, gsl_odeiv2_driver * d, Rcpp::NumericMatrix P, Rcpp::NumericMatrix invP) {
+    // do we have the values cached?
+    // P_ij_key key = P_ij_key(i,j,s,t);
+    // if (P_ijs2.count(key)>0) return P_ijs2[key];
+    // otherwise...
+    int fulldim = d->sys->dimension+1; // assumes death state is the last state
+    if (s==0) { 
+      return P(i+j*fulldim,t);
+    } else {
+      double pij = 0.0;
+      for (int k=0; k<fulldim-1; ++k) {
+	pij += invP(k+i*fulldim,s) * P(j+k*fulldim,t);
+      }
+      // cache the results
+      // P_ijs2[key] = y;
+      return pij;
+    }
+  }
+
+  double
+  P_iK2(int i, double s, double t, gsl_odeiv2_driver * d, Rcpp::NumericMatrix P, Rcpp::NumericMatrix invP) {
+    double total = 0.0;
+    int fulldim = d->sys->dimension+1;
+    for (int k=0; k<fulldim-1; ++k)
+      total += P_ij2(i,k,s,t,d,P,invP);
+    return total;
+  }
+
+
+  // Calculating the probability matrices cf. the log-likelihood
+  RcppExport SEXP 
+  gsl_main2ReclassifiedPS2(SEXP _finalState,
+			  SEXP _recall,
+			  SEXP _time1, SEXP _time2, SEXP _time3,
+			  SEXP _freq,
+			  SEXP _int01, SEXP _int12,
+			  SEXP _lower01, SEXP _upper01, SEXP _nterm01, SEXP _pmatrix01, SEXP _sp01,
+			  SEXP _lower12, SEXP _upper12, SEXP _nterm12, SEXP _pmatrix12, SEXP _sp12,
+			  // SEXP _lower01, SEXP _upper01, SEXP _nterm01, 
+			  // SEXP _lower12, SEXP _upper12, SEXP _nterm12, 
+			  SEXP _beta01, SEXP _beta12,
+			  SEXP _beta20,
+			  SEXP _ages0,
+			  SEXP _mu0,
+			  SEXP _mu1,
+			  SEXP _mu2,
+			  SEXP _debug)
+  {
+    
+    bool debug = Rcpp::as<bool>(_debug);
+
+    RcppGSL::vector<int> recall = _recall, finalState = _finalState; 
+
+    RcppGSL::vector<double> 
+      // finalState = _finalState,
+      time1=_time1,
+      time2=_time2,
+      time3=_time3,
+      freq = _freq,
+      beta01 = _beta01,
+      beta12 = _beta12,
+      ages0 = _ages0,
+      mu0 = _mu0,
+      mu1 = _mu1,
+      mu2 = _mu2
+      ;
+
+    RcppGSL::matrix<double> 
+      pmatrix01 = _pmatrix01, 
+      pmatrix12 = _pmatrix12;
+
+    double int01=as<double>(_int01), 
+      int12=as<double>(_int12),
+      beta20=as<double>(_beta20),
+      lower01=as<double>(_lower01),
+      upper01=as<double>(_upper01),
+      sp01=as<double>(_sp01),
+      lower12=as<double>(_lower12),
+      upper12=as<double>(_upper12),
+      sp12=as<double>(_sp12);
+
+    int 
+      nterm01=as<int>(_nterm01),
+      nterm12=as<int>(_nterm12);
+  
+    gsl_spline *spline0, *spline1, *spline2;
+    gsl_interp_accel *acc0, *acc1, *acc2;
+    acc0 = gsl_interp_accel_alloc ();
+    acc1 = gsl_interp_accel_alloc ();
+    acc2 = gsl_interp_accel_alloc ();
+    spline0 = gsl_spline_alloc (gsl_interp_cspline, ages0.size());
+    spline1 = gsl_spline_alloc (gsl_interp_cspline, ages0.size());
+    spline2 = gsl_spline_alloc (gsl_interp_cspline, ages0.size());
+    gsl_spline_init (spline0, ages0->data, mu0->data, ages0.size());
+    gsl_spline_init (spline1, ages0->data, mu1->data, ages0.size());
+    gsl_spline_init (spline2, ages0->data, mu2->data, ages0.size());
+
+    // initial parameters for initiation
+    // ps(double boundaryL, double boundaryU, bool intercept = false, bool centred = false, double centre = 0.0, size_t nterm = 10, size_t k = 4) : 
+
+    ps * ps01 = new ps(lower01, // lower boundary
+		       upper01, // upper boundary
+		       false, // intercept
+		       true, // centred
+		       20.0, // centre
+		       nterm01 // nterm
+		       );
+
+    // knots for cessation
+    ps * ps12 = new ps(lower12,
+		       upper12,
+		       false, // intercept
+		       true, // centred
+		       40.0, // centre
+		       nterm12
+		       );
+
+    size_t K = ages0.size()-1;
+    double maxage = ages0[K]+0.5;
+
+    Param beta = {int01, int12, beta20, maxage, spline0, spline1, spline2, acc0, acc1, acc2, ps01, ps12, beta01, beta12};
+
+    gsl_odeiv2_system sys = {funcReclassified, NULL, 4, &beta};
+    gsl_odeiv2_driver * d = 
+      gsl_odeiv2_driver_alloc_y_new (&sys, gsl_odeiv2_step_rk8pd,
+				     1e-10, 1e-10, 0.0);
+
+    size_t dimension = d->sys->dimension;
+    size_t fulldim = dimension+1;
+    // 3-D matrix
+    Rcpp::NumericMatrix P(fulldim*fulldim,K), invP(fulldim*fulldim,K);
+    double y[dimension];
+    // RcppGSL::matrix<double> P(fulldim,fulldim), inv(fulldim,fulldim);
+    gsl_matrix * Pmat = gsl_matrix_alloc(fulldim,fulldim);
+    gsl_matrix * invPmat = gsl_matrix_alloc(fulldim,fulldim);
+    gsl_permutation * perm = gsl_permutation_alloc (fulldim);
+    // loop over the dimensions
+    for (size_t i=0; i<dimension; ++i) {
+      // initial values
+      for (size_t j=0; j<dimension; ++j)
+	y[j] = 0.0;
+      y[i] = 1.0;
+      double s, t;
+      size_t k;
+      for (s = 0.0, t = 0.5, k = 0; k<K; s=t, ++t, ++k) { // loop over end times
+	int status = gsl_odeiv2_driver_apply (d, &s, t, y);
+	if (status != GSL_SUCCESS)
+	  REprintf ("error, return value=%d\n", status);
+	for (size_t j=0; j<dimension; ++j) {
+	  // if (y[j]<1e-7 && y[j]>-1e-7) 
+	  //   P(i+fulldim*j, k) = 0; // zapsmall
+	  //else 
+	  P(i+fulldim*j, k) = y[j];
+	}
+      }
+    }
+    // add in column sums
+    for (size_t k = 0; k<=K; ++k) {
+      for (size_t i=0; i<fulldim; ++i) {
+	P(i+fulldim*(fulldim-1),k) = 1;
+	for (size_t j=0; j<fulldim-1; ++j) {
+	  P(i+fulldim*(fulldim-1),k) -= P(i+j*fulldim,k);
+	}
+      }
+    }
+    // calculate inverses
+    for (size_t k = 0; k<K; ++k) {
+      for (size_t i=0; i<fulldim; ++i) {
+	for (size_t j=0; j<fulldim; ++j) {
+	  gsl_matrix_set(Pmat,i,j,P(i+j*fulldim,k));
+	}
+      }
+      if (debug) {
+	Rprintf("k=%i\n",k);
+	gsl_matrix_Rprintf(Pmat);
+      }
+      int signum;
+      gsl_linalg_LU_decomp (Pmat, perm, &signum);
+      gsl_linalg_LU_invert (Pmat, perm, invPmat);
+      for (size_t i=0; i<fulldim; ++i) {
+	for (size_t j=0; j<fulldim; ++j) {
+	  invP(i+j*fulldim,k) = gsl_matrix_get(invPmat,i,j);
+	}
+      }
+    }
+
+    double negll = 0.0;
+    for (size_t i = 0; i< finalState.size(); ++i) {
+      double ll = 0.0;
+      int state = finalState[i];
+      double s=time1[i], t=time2[i], u=time3[i];
+      // double negllReclassified(int state, double s, double t, double u, gsl_odeiv2_driver * d, double freq = 1.0, int recall = 1)
+      // negll += negllReclassified(finalState[i], time1[i], time2[i], time3[i], d, freq[i], recall[i]); // add negative components
+      if (recall[i] == Recall) { // recall of smoking history available
+	if (state == Never) // Never->Never _and_ Never->Reclassified
+	  ll = log(P_ij2(Never,Never,0.0,u,d,P,invP)+
+		   P_ij2(Never,Reclassified,0.0,u,d,P,invP)); // ignore s and t
+	if (state == Current)
+	  ll = log(P_ij2(Never,Never,0.0,s,d,P,invP))+
+	    log(mu_ijReclassified(Never,Current,s,d))+
+	    log(P_ij2(Current,Current,s,u,d,P,invP)); // ignore t
+	if (state == Former)
+	  ll = log(P_ij2(Never,Never,0.0,s,d,P,invP))+
+	    log(mu_ijReclassified(Never,Current,s,d))+
+	    log(P_ij2(Current,Current,s,t,d,P,invP))+
+	    log(mu_ijReclassified(Current,Former,t,d))+
+	    log(P_ij2(Former,Former,t,u,d,P,invP));
+      }
+      if (recall[i] == CurrentStatus) {// current status only
+	ll = log(P_ij2(Never,state,0.0,u,d,P,invP));
+      }
+      if (recall[i] == FormerWithCessation && state == Former) {// recall of age quit (not initiation) for former smokers
+	ll = log(P_ij2(Never,Current,0.0,t,d,P,invP)) + 
+	  log(mu_ijReclassified(Current,Former,t,d))+
+	  log(P_ij2(Former,Former,t,u,d,P,invP)); // ignores s
+      }
+      if (ll == 0.0) REprintf("ll==0.0? (state=%i, recall=%i)\n",state,recall[i]);
+      ll -= log(P_iK2(Never,0.0,u,d,P,invP));
+      ll *= freq[i];
+      if (debug) Rprintf("ll=%g; ",ll);
+      negll += -ll;
+    }
+
+    delete ps01;
+    delete ps12;
+
+    beta01.free();
+    beta12.free();
+    ages0.free();
+    mu0.free();
+    mu1.free();
+    mu2.free();
+  
+    gsl_matrix_free (Pmat);
+    gsl_matrix_free (invPmat);
+    gsl_spline_free (spline0);
+    gsl_spline_free (spline1);
+    gsl_spline_free (spline2);
+    gsl_interp_accel_free (acc0);
+    gsl_interp_accel_free (acc1);
+    gsl_interp_accel_free (acc2);
+    gsl_odeiv2_driver_free (d);
+    gsl_permutation_free (perm);
+
+    return Rcpp::List::create(Rcpp::Named("P")=wrap(P),
+			      Rcpp::Named("invP")=wrap(invP),
 			      Rcpp::Named("negll")=wrap(negll));
   }
 
