@@ -48,6 +48,7 @@
 }
 
 \newcommand{\K}{\ensuremath{\bm{K}}}
+\newcommand{\ddTheta}{\ensuremath{\frac{\partial}{\partial\theta}}}
 
 
 \begin{document}
@@ -151,7 +152,6 @@ model has one primary time scale and is a \emph{continuous time multi-state Mark
 \end{figure}
 
 
-
 Let the probability of moving from state $i$ at time $s$ to state $j$
 at time $t$ be $P_{ij}(s,t)$, and define
 $\alpha_{ii}(s)=-\sum_{j\neq i} \alpha_{ij}(s)$. Then we have the
@@ -186,7 +186,6 @@ intensity $\lambda_{ij}(t;\tau)$ from state $i$ to state $j$ at time $t$, with o
 % conditional on observation at time $\tau$ 
 
 \begin{figure}[ht]
-  
 \begin{center}
 \begin{tikzpicture}[->,bend
   angle=20,semithick,>=stealth'] %,font=\sffamily]
@@ -263,6 +262,19 @@ For a purged Markov model, consider an observation that starts in state $u_1$ at
 \frac{P_{u_I,v_I}(t_I,\tau)}{P_{u_1,K}(t_{1},\tau)}
 \end{align*}
 \end{proof} 
+
+It immediately follows that the log-likelihood components are
+\begin{align*}
+l &= \log\left\{\prod_{i=1}^{I-1} \left\{Q_{u_i,v_i}(t_i,t_{i+1};\tau) \lambda_{v_i,u_{i+1}}(t_{i+1};\tau)\right\}Q_{u_I,v_I}(t_I,\tau;\tau) \right\} \\
+&= \sum_{i=1}^{I-1}\left\{\log(P_{u_i,v_i}(t_i,t_{i+1}))+ \log(\alpha_{v_i,u_{i+1}}(t_{i+1}))\right\} 
++\log(P_{u_I,v_I}(t_I,\tau))-\log(P_{u_1,K}(t_{1},\tau))
+\end{align*}
+and that the gradient for the log-likelihood with respect to parameter $\theta$ is
+\begin{align*}
+\frac{\partial l}{\partial \theta} 
+= \sum_{i=1}^{I-1}\left\{\frac{\ddTheta P_{u_i,v_i}(t_i,t_{i+1})}{P_{u_i,v_i}(t_i,t_{i+1})}+ \frac{\ddTheta \alpha_{v_i,u_{i+1}}(t_{i+1})}{\alpha_{v_i,u_{i+1}}(t_{i+1})}\right\} 
++\frac{\ddTheta P_{u_I,v_I}(t_I,\tau)}{P_{u_I,v_I}(t_I,\tau)}-\frac{\ddTheta P_{u_1,K}(t_{1},\tau)}{P_{u_1,K}(t_{1},\tau)}
+\end{align*}
 
 \section{Data sources}
 
@@ -358,15 +370,44 @@ The likelihood components can be recognised as the standard
 multi-state model likelihoods conditional on being observable.  Let the data
 be stratified into disjoint sets $\Omega_k$, where $k$ represents the
 available data. Then the total likelihood is equal to
-\begin{align*}
+\begin{align}
   L = 
 \prod_{i \in \Omega_1} L_1(\tau_i)  
 \prod_{i \in \Omega_2} L_2(\tau_i)  
 \prod_{i \in \Omega_3} L_3(\tau_i)  
 \prod_{i \in \Omega_{12}} L_{12}(s_i,\tau_i)  
 \prod_{i \in \Omega_{123}} L_{123}(s_i,t_i,\tau_i)  
-\prod_{i \in \Omega_{23}} L_{23}(t_i,\tau_i)  
-\end{align*}
+\prod_{i \in \Omega_{23}} L_{23}(t_i,\tau_i)  \label{eq:likelihood}
+\end{align}
+
+\subsection*{A simplification}
+
+The likelihood can be simplified by dividing through by $P_{10}(s,t)$ in Equation \ref{eq:likelihood} and assumes that $\alpha_{10}(t)=\alpha_{40}(t)$, which is equivalent to the following Model C:
+
+\begin{figure}[!h]
+\begin{center}
+\begin{tikzpicture}[->,bend
+  angle=20,semithick,>=stealth']%,font=\sffamily]
+\pgfsetmatrixcolumnsep{15mm}
+\matrix [matrix of nodes,row sep=16mm,ampersand replacement=\&]
+{
+|(Never)| 1: Never \& |(Current)| 2: Current  \&
+|(Former)| 3: Former \& |(Reclassified)| 4: Reclassified  \\
+ \& \& |(Death)| 0: Death \\
+};
+\begin{scope}[every node/.style={midway,auto}]
+\draw (Never) to node {$\alpha_{12}(t)$} (Current);
+\draw (Current) to node {$\alpha_{23}(t)$} (Former);
+\draw (Former) to  node {$\alpha_{34}(t)$} (Reclassified);
+\draw (Current) to node [anchor=north east] {$\alpha_{20}(t)-\alpha_{10}(t)$} (Death);
+\draw (Former) to node {$\alpha_{30}(t)-\alpha_{10}(t)$} (Death);
+\end{scope}
+\end{tikzpicture}
+\end{center}
+  \caption{Model C for smoking behaviour}
+  \label{fig:baselineC}
+\end{figure}
+
 
 
 \section{Estimation}

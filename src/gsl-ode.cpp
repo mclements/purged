@@ -12,6 +12,7 @@
 #include <gsl/gsl_linalg.h>
 #include <gsl/gsl_blas.h>
 
+#pragma GCC diagnostic ignored "-Wunused-local-typedefs"
 #include <boost/algorithm/cxx11/iota.hpp>
 #include <boost/tuple/tuple.hpp>
 #include <boost/tuple/tuple_comparison.hpp>
@@ -20,12 +21,13 @@ namespace { // anonymous
 
   using namespace Rcpp;
 
-
   //forward declaration(s)
-  
+
+  // Base class for splines
   class splineBasis {
   public:
     virtual double calc(double t, gsl_vector * beta, bool nocentering = false) = 0;
+    virtual void calcBasis(double x, gsl_vector * basis, bool nocentering = false) = 0;
   };
   
   // declare types
@@ -297,7 +299,7 @@ namespace { // anonymous
   double bounds(double x, double lo, double hi) { return x<lo ? lo : (x>hi ? hi : x); } 
 
 
-  // define the ODE
+  // define the ODE  (Model B, using observed mortality)
   int
   funcReclassifiedOLD (double t, const double y[], double f[],
 		    void *params)
@@ -317,7 +319,7 @@ namespace { // anonymous
     return GSL_SUCCESS;
   }
 
-  // define the ODE
+  // define the ODE (Model C, using excess mortality)
   int
   funcReclassified (double t, const double y[], double f[],
 		    void *params)
@@ -337,8 +339,9 @@ namespace { // anonymous
     return GSL_SUCCESS;
   }
 
+  // Model B: observed mortality
   double
-  mu_ijReclassified (int i, int j, double t, gsl_odeiv2_driver * d)
+  mu_ijReclassifiedOLD (int i, int j, double t, gsl_odeiv2_driver * d)
   {
     Param* P = static_cast<Param*>(d->sys->params);
     if (i==Never && j==Current)  return exp(P->int01 + P->s01->calc(t, P->beta01));
@@ -349,6 +352,26 @@ namespace { // anonymous
       if (i==Current) return gsl_spline_eval(P->spline1, bounds(t,0.5,P->maxage), P->acc1);
       if (i==Former) return gsl_spline_eval(P->spline2, bounds(t,0.5,P->maxage), P->acc2);
       if (i==Reclassified) return gsl_spline_eval(P->spline0, bounds(t,0.5,P->maxage), P->acc0);
+    }
+    REprintf("Unexpected combinations of states: %i to %j.\n",i,j);
+    return 0.0;
+  }
+
+  // Model C: excess mortality
+  double
+  mu_ijReclassified (int i, int j, double t, gsl_odeiv2_driver * d)
+  {
+    Param* P = static_cast<Param*>(d->sys->params);
+    if (i==Never && j==Current)  return exp(P->int01 + P->s01->calc(t, P->beta01));
+    if (i==Current && j==Former) return exp(P->int12 + P->s12->calc(t, P->beta12));
+    if (i==Former && j==Reclassified)  return exp(P->beta20);
+    if (j==Death) {
+      if (i==Never) return 0.0;
+      if (i==Current) return gsl_spline_eval(P->spline1, bounds(t,0.5,P->maxage), P->acc1) -
+		       gsl_spline_eval(P->spline0, bounds(t,0.5,P->maxage), P->acc0);
+      if (i==Former) return gsl_spline_eval(P->spline2, bounds(t,0.5,P->maxage), P->acc2) - 
+		       gsl_spline_eval(P->spline0, bounds(t,0.5,P->maxage), P->acc0);
+      if (i==Reclassified) return 0.0;
     }
     REprintf("Unexpected combinations of states: %i to %j.\n",i,j);
     return 0.0;
@@ -393,7 +416,7 @@ namespace { // anonymous
   double negllReclassified(int state, double s, double t, double u, gsl_odeiv2_driver * d, double freq = 1.0, int recall = 1) {
     double ll = 0.0;
     if (recall == Recall) { // recall of smoking history available
-      if (state == Never) // Never->Never _and_ Never->Reclassified
+      if (state == Never) // Never->Never _and_ Never->Reclassified (equiv to current status)
 	ll = log(P_ij(Never,Never,0.0,u,d)+
 		 P_ij(Never,Reclassified,0.0,u,d)); // ignore s and t
       if (state == Current)
@@ -417,7 +440,7 @@ namespace { // anonymous
     }
 
     if (ll == 0.0) REprintf("ll==0.0? (state=%i, recall=%i)\n",state,recall);
-    ll = ll - log(P_iK(Never,0.0,u,d));
+    ll -= log(P_iK(Never,0.0,u,d));
   
     return -ll*freq;
   }
@@ -497,8 +520,8 @@ namespace { // anonymous
 
     gsl_odeiv2_system sys = {funcReclassified, NULL, 4, &beta};
     gsl_odeiv2_driver * d = 
-      gsl_odeiv2_driver_alloc_y_new (&sys, gsl_odeiv2_step_rk8pd,
-				     1e-10, 1e-10, 0.0);
+      gsl_odeiv2_driver_alloc_y_new (&sys, gsl_odeiv2_step_rkf45,
+				     1e-12, 1e-12, 0.0);
 
     // clear the values whenever the parameters change
     P_ijs.clear();
@@ -626,8 +649,8 @@ namespace { // anonymous
 
     gsl_odeiv2_system sys = {funcReclassified, NULL, 4, &beta};
     gsl_odeiv2_driver * d = 
-      gsl_odeiv2_driver_alloc_y_new (&sys, gsl_odeiv2_step_rk8pd,
-				     1e-10, 1e-10, 0.0);
+      gsl_odeiv2_driver_alloc_y_new (&sys, gsl_odeiv2_step_rkf45,
+				     1e-12, 1e-12, 0.0);
 
     // clear the values whenever the parameters change
     P_ijs.clear();
@@ -762,8 +785,9 @@ namespace { // anonymous
 
     gsl_odeiv2_system sys = {funcReclassified, NULL, 4, &beta};
     gsl_odeiv2_driver * d = 
-      gsl_odeiv2_driver_alloc_y_new (&sys, gsl_odeiv2_step_rk8pd,
-				     1e-10, 1e-10, 0.0);
+      //gsl_odeiv2_driver_alloc_y_new (&sys, gsl_odeiv2_step_rk8pd,
+      gsl_odeiv2_driver_alloc_y_new (&sys, gsl_odeiv2_step_rkf45,
+				     1e-12, 1e-12, 0.0);
 
     // clear the values whenever the parameters change
     P_ijs.clear();
@@ -837,6 +861,11 @@ namespace { // anonymous
 			      Rcpp::Named("negll")=wrap(negll));
   }
 
+  
+  /** @brief 
+      Re-implementation using matrix inverses to calculate P(s,t). 
+      This may not be numerically stable.
+   **/
 
   std::map<P_ij_key,double> P_ijs2;
 
@@ -847,17 +876,17 @@ namespace { // anonymous
     // if (P_ijs2.count(key)>0) return P_ijs2[key];
     // otherwise...
     int fulldim = d->sys->dimension+1; // assumes death state is the last state
+    double pij = 0.0;
     if (s==0) { 
-      return P(i+j*fulldim,t);
+      pij = P(i+j*fulldim,t);
     } else {
-      double pij = 0.0;
       for (int k=0; k<fulldim-1; ++k) {
-	pij += invP(k+i*fulldim,s) * P(j+k*fulldim,t);
+	pij += invP(k+i*fulldim,s+1) * P(j+k*fulldim,t+1); // offset=1
       }
-      // cache the results
-      // P_ijs2[key] = y;
-      return pij;
     }
+    // cache the results
+    // P_ijs2[key] = pij;
+    return pij;
   }
 
   double
@@ -961,12 +990,15 @@ namespace { // anonymous
     size_t K = ages0.size()-1;
     double maxage = ages0[K]+0.5;
 
+    // clear the values whenever the parameters change
+    // P_ijs2.clear();
+
     Param beta = {int01, int12, beta20, maxage, spline0, spline1, spline2, acc0, acc1, acc2, ps01, ps12, beta01, beta12};
 
     gsl_odeiv2_system sys = {funcReclassified, NULL, 4, &beta};
     gsl_odeiv2_driver * d = 
-      gsl_odeiv2_driver_alloc_y_new (&sys, gsl_odeiv2_step_rk8pd,
-				     1e-10, 1e-10, 0.0);
+      gsl_odeiv2_driver_alloc_y_new (&sys, gsl_odeiv2_step_rkf45,
+				     1e-12, 1e-12, 0.0);
 
     size_t dimension = d->sys->dimension;
     size_t fulldim = dimension+1;
@@ -1013,10 +1045,10 @@ namespace { // anonymous
 	  gsl_matrix_set(Pmat,i,j,P(i+j*fulldim,k));
 	}
       }
-      if (debug) {
-	Rprintf("k=%i\n",k);
-	gsl_matrix_Rprintf(Pmat);
-      }
+      // if (debug) {
+      // 	Rprintf("k=%i\n",k);
+      // 	gsl_matrix_Rprintf(Pmat);
+      // }
       int signum;
       gsl_linalg_LU_decomp (Pmat, perm, &signum);
       gsl_linalg_LU_invert (Pmat, perm, invPmat);
@@ -1064,6 +1096,23 @@ namespace { // anonymous
       negll += -ll;
     }
 
+    gsl_vector *v01;
+    double penalty01=0.0;
+    v01 = gsl_vector_alloc(beta01->size);
+    gsl_blas_dgemv(CblasNoTrans, 1.0, pmatrix01, beta01, 0.0, v01);
+    gsl_blas_ddot(beta01,v01,&penalty01);
+    gsl_vector_free(v01);
+    double pnegll = negll + penalty01 * sp01/2.0; // add positive penalty
+
+    gsl_vector *v12;
+    double penalty12=0.0;
+    v12 = gsl_vector_alloc(beta12->size);
+    gsl_blas_dgemv(CblasNoTrans, 1.0, pmatrix12, beta12, 0.0, v12);
+    gsl_blas_ddot(beta12,v12,&penalty12);
+    gsl_vector_free(v12);
+    pnegll += penalty12 * sp12/2.0; // add positive penalty
+
+
     delete ps01;
     delete ps12;
 
@@ -1087,7 +1136,236 @@ namespace { // anonymous
 
     return Rcpp::List::create(Rcpp::Named("P")=wrap(P),
 			      Rcpp::Named("invP")=wrap(invP),
-			      Rcpp::Named("negll")=wrap(negll));
+			      Rcpp::Named("negll")=wrap(negll),
+			      Rcpp::Named("pnegll")=wrap(pnegll));
+  }
+
+
+  /** @brief
+      Implementation that also calculates partials for P_ij(s,t)
+   **/
+
+  // define the ODE (Model C, using excess mortality)
+  int
+  funcReclassifiedExtended (double t, 
+			    const double y[],   // dimension: 4*(ntheta+1)
+			    double f[],         // dimension: 4*(ntheta+1)
+			    void *params)       // type: Param*
+  {
+    double alpha01, alpha12, alpha20, mu0, mu1, mu2;
+    double dalpha01, dalpha12, dalpha20;
+    Param* P = static_cast<Param*>(params);
+    int ntheta = P->beta01->size + P->beta12->size + 3;
+    gsl_vector *x01, *x12, *x20;
+    gsl_vector *_beta01, *_beta12;
+    int j = 0;
+
+    // allocate vectors
+    x01 = gsl_vector_alloc(ntheta);
+    x12 = gsl_vector_alloc(ntheta);
+    x20 = gsl_vector_alloc(ntheta);
+    _beta01 = gsl_vector_alloc(P->beta01->size);
+    _beta12 = gsl_vector_alloc(P->beta12->size);
+    
+    // initialise vectors to zero
+    gsl_vector_set_all(x01,0.0);
+    gsl_vector_set_all(x12,0.0);
+    gsl_vector_set_all(x20,0.0);
+
+    // calculate design vectors for the splines
+    P->s01->calcBasis(t, _beta01, false);
+    P->s12->calcBasis(t, _beta12, false);
+
+    // set theta and x 
+    // intercept
+    gsl_vector_set(x01,j,1);
+    // spline parameters
+    for (size_t i = 0; i<P->beta01->size; ++i) {
+      gsl_vector_set(x01,j,gsl_vector_get(_beta01,i));
+    }
+    // intercept
+    gsl_vector_set(x12,j,1);
+    // spline parameters
+    for (size_t i = 0; i<P->beta12->size; ++i) {
+      gsl_vector_set(x12, j, gsl_vector_get(_beta12, i));
+    }
+    gsl_vector_set(x20,j,1);
+
+    alpha01 = exp(P->int01 + P->s01->calc(t, P->beta01));
+    alpha12 = exp(P->int12 + P->s12->calc(t, P->beta12));
+    alpha20 = exp(P->beta20);
+    mu0 = gsl_spline_eval(P->spline0, bounds(t,0.5,P->maxage), P->acc0);
+    mu1 = gsl_spline_eval(P->spline1, bounds(t,0.5,P->maxage), P->acc1);
+    mu2 = gsl_spline_eval(P->spline2, bounds(t,0.5,P->maxage), P->acc2);
+
+    // base equations
+    f[Never] = -alpha01*y[Never];
+    f[Current] = alpha01*y[Never]-(alpha12+mu1-mu0)*y[Current];
+    f[Former] = alpha12*y[Current]-(alpha20+mu2-mu0)*y[Former];
+    f[Reclassified] = alpha20*y[Former];
+
+    // d/dt (partial P(s,t)/partial theta) = (partial P(s,t)/partial theta)*alpha + P(s,t)(partial alpha / partial theta)
+    for (int offset=4, i=0; i<ntheta; ++i, offset += 4) {
+      dalpha01 = alpha01 * gsl_vector_get(x01,i);
+      dalpha12 = alpha12 * gsl_vector_get(x12,i);
+      dalpha20 = alpha20 * gsl_vector_get(x20,i);
+      f[Never+offset] = - (alpha01*y[Never+offset] + dalpha01*y[Never]);
+      f[Current+offset] = alpha01*y[Never+offset] + dalpha01*y[Never] -
+	((alpha12+mu1-mu0)*y[Current+offset] + dalpha12*y[Current]);
+      f[Former+offset] = (alpha12+mu2-mu0)*y[Current+offset]+dalpha12*y[Current] -
+	((alpha20+mu2-mu0)*y[Former+offset] + dalpha20*y[Former]);
+      f[Reclassified+offset] = alpha20*y[Former+offset] + dalpha20*y[Former];
+    }
+
+    // tidy up
+    gsl_vector_free(x01);
+    gsl_vector_free(x12);
+    gsl_vector_free(x20);
+    gsl_vector_free(_beta01);
+    gsl_vector_free(_beta12);
+
+    return GSL_SUCCESS;
+  }
+
+  // for efficiency, cache the values for P_ij
+  struct P_ij_report {
+    std::vector<double> P; 
+    std::vector<double> dPdtheta;
+  };
+  std::map<P_ij_key,P_ij_report> P_ij_reports;
+
+  P_ij_report
+  p_ij_report(int i, int j, double s, double t, gsl_odeiv2_driver * d) {
+    // do we have the values cached?
+    P_ij_key key = P_ij_key(i,j,s,t);
+    if (P_ij_reports.count(key)>0) return P_ij_reports[key];
+    // otherwise...
+    size_t dimension = d->sys->dimension;
+    size_t n_equations = 4;
+    size_t M = dimension / n_equations; // number of parameters + 1 
+    double y[dimension];
+    for (size_t k=0; k<dimension; ++k)
+      y[k] = 0.0;
+    y[i] = 1.0;
+    double tm = s;
+    int status = gsl_odeiv2_driver_apply (d, &tm, t, y);
+    if (status != GSL_SUCCESS)
+      REprintf ("error, return value=%d\n", status);
+    // cache the results
+    for (size_t k=0; k<4; ++k) { // state
+      P_ij_report out;
+      for (size_t m=0; m<n_equations; ++m) 
+	out.P.push_back(y[m]);
+      for (size_t m=n_equations; m<M; ++m) 
+	out.dPdtheta.push_back(y[m+k*M]);
+      P_ij_reports[P_ij_key(i,k,s,t)] = out;
+    }
+    return P_ij_reports[P_ij_key(i,j,s,t)];
+  }
+
+  RcppExport SEXP 
+  gsl_predReclassifiedExtended( SEXP _maxage,
+			SEXP _finalState,
+			SEXP _time,
+			SEXP _int01, SEXP _int12,
+			SEXP _knots01, SEXP _knots12, 
+			SEXP _beta01, SEXP _beta12,
+			SEXP _beta20,
+			SEXP _ages0,
+			SEXP _mu0,
+			SEXP _mu1,
+			SEXP _mu2)
+  {
+    
+    RcppGSL::vector<double> 
+      finalState = _finalState,
+      time=_time,
+      knots01=_knots01,
+      knots12=_knots12,
+      beta01 = _beta01,
+      beta12 = _beta12,
+      ages0 = _ages0,
+      mu0 = _mu0,
+      mu1 = _mu1,
+      mu2 = _mu2
+      ;
+
+    // FIX OUTPUT
+    std::vector<P_ij_report> reports;
+
+    double int01=as<double>(_int01), 
+      int12=as<double>(_int12),
+      beta20=as<double>(_beta20),
+      maxage=as<double>(_maxage);
+  
+    gsl_spline *spline0, *spline1, *spline2;
+    gsl_interp_accel *acc0, *acc1, *acc2;
+    acc0 = gsl_interp_accel_alloc ();
+    acc1 = gsl_interp_accel_alloc ();
+    acc2 = gsl_interp_accel_alloc ();
+    spline0 = gsl_spline_alloc (gsl_interp_cspline, ages0.size());
+    spline1 = gsl_spline_alloc (gsl_interp_cspline, ages0.size());
+    spline2 = gsl_spline_alloc (gsl_interp_cspline, ages0.size());
+    gsl_spline_init (spline0, ages0->data, mu0->data, ages0.size());
+    gsl_spline_init (spline1, ages0->data, mu1->data, ages0.size());
+    gsl_spline_init (spline2, ages0->data, mu2->data, ages0.size());
+
+    // initial parameters for initiation
+    ns * ns01 = new ns(knots01, 
+		       false, // intercept
+		       true, // centred
+		       20.0 // centre
+		       );
+
+    // knots for cessation
+    ns * ns12 = new ns(knots12, 
+		       false, // intercept
+		       true, // centred
+		       40.0 // centre
+		       );
+
+    Param beta = {int01, int12, beta20, maxage, spline0, spline1, spline2, acc0, acc1, acc2, ns01, ns12, beta01, beta12};
+
+    size_t n_coef=3+3+3; // Is this correct?
+    size_t n_equations = 4;
+    size_t M = (n_coef+1) * n_equations;
+
+    gsl_odeiv2_system sys = {funcReclassifiedExtended, NULL, M, &beta};
+    gsl_odeiv2_driver * d = 
+      gsl_odeiv2_driver_alloc_y_new (&sys, gsl_odeiv2_step_rkf45,
+				     1e-10, 1e-10, 0.0);
+
+    // clear the values whenever the parameters change
+    P_ij_reports.clear();
+
+    for (size_t i = 0; i< finalState.size(); ++i) {
+      reports.push_back(p_ij_report(Never,finalState[i],0.0,time[i],d)); 
+    }
+
+    delete ns01;
+    delete ns12;
+
+    finalState.free();
+    time.free();
+    knots01.free();
+    knots12.free();
+    beta01.free();
+    beta12.free();
+    ages0.free();
+    mu0.free();
+    mu1.free();
+    mu2.free();
+  
+    gsl_spline_free (spline0);
+    gsl_spline_free (spline1);
+    gsl_spline_free (spline2);
+    gsl_interp_accel_free (acc0);
+    gsl_interp_accel_free (acc1);
+    gsl_interp_accel_free (acc2);
+    gsl_odeiv2_driver_free (d);
+
+    // return reports;
+    return wrap(1);
   }
 
 

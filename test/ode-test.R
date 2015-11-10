@@ -1,4 +1,3 @@
-refresh
 ## read in the data
 if (doOnce <- FALSE) {
     setwd("~/Documents/clients/ted")
@@ -123,6 +122,8 @@ system.time(temp3 <- test("gsl_main2ReclassifiedPS2",init,stratifiedData[[10]],s
 system.time(temp2 <- test("gsl_main2ReclassifiedPS",init,stratifiedData[[10]],sp01=0.1,sp12=1))
 temp2$negll
 temp3$negll
+temp2$pnegll
+temp3$pnegll
 head(stratifiedData[[10]][[1]]$smoking)
 
 ## Reimplement the example in R
@@ -212,12 +213,14 @@ out <- aperm(out,3:1)
 log(sum(out[1,c(1,4),71])/sum(out[1,1:4,71]))*80
 log(out[1,2,71]/sum(out[1,1:4,71]))*81
 log(out[1,3,72]/sum(out[1,1:4,72]))*8
-
+##
 temp <- temp3$P
 dim(temp) <- c(5,5,ncol(temp))
 v <- temp[,,26+1]; 68*log((v[1]+v[1+(4-1)*5])/(v[1]+v[1+(2-1)*5]+v[1+(3-1)*5]+v[1+(4-1)*5]))
 mat <- solve(temp[,,17+1]) %*% temp[,,26+1]
 v <- temp[,,26+1]; 68*log((v[1]+v[1+(4-1)*5])/(v[1]+v[1+(2-1)*5]+v[1+(3-1)*5]+v[1+(4-1)*5]))
+
+
 
 temp <- temp3$P
 dim(temp) <- c(5,5,ncol(temp))
@@ -228,7 +231,7 @@ inverses <- apply(temp,3,solve)
 dim(temp2$inverse) <- dim(inverses) <- c(5,5,dim(temp)[3])
 inverses[,,1]/temp2$inverse[,,1]
 inverses[,,10]/temp2$inverse[,,10]
-
+##
 fun <- function(P,s,t) solve(P[,,s],P[,,t])
 fun(temp,10,60)
 fun2 <- function(P,inverses,s,t) inverses[,,s] %*% P[,,t]
@@ -236,7 +239,6 @@ fun2(temp,inverses,10,60)
 fun(temp,10,60)/fun2(temp,inverses,10,60)
 fun3 <- function(P,inverses,s,t,i,j) sum(inverses[i,,s] * P[,j,t])
 fun3(temp,inverses,10,60,1,4)
-
 
 
 optimObjective <- function(stratum,sp01=0.1,sp12=1,hessian=FALSE) {
@@ -316,7 +318,7 @@ optimObjective <- function(stratum,sp01=0.1,sp12=1,hessian=FALSE) {
         ## Hl <- numDeriv::hessian(llike,coef)
         Hl <- optimHess(coef(out), negll)
         Hinv <- solve(out$hessian)
-        out$trace <- -sum(diag(Hinv %*% Hl))
+        out$trace <- sum(diag(Hinv %*% Hl))
     }
     return(out)
 }
@@ -325,14 +327,16 @@ init <- c(-3,
           rep(0.1,5+2),
           rep(0.1,5+2),
           log(0.01))
-init <- c(-2.2084, -5.2397, 1.7865, 3.9082, 4.2282, 2.6938, 1.7596, 2.0776, 
-          0.8403, -0.5627, -0.9299, -1.105, -0.6869, 0.1301, 1.1833, 2.0894, 
-          -4.3141)
+## init <- c(-2.2084, -5.2397, 1.7865, 3.9082, 4.2282, 2.6938, 1.7596, 2.0776, 
+##           0.8403, -0.5627, -0.9299, -1.105, -0.6869, 0.1301, 1.1833, 2.0894, 
+##           -4.3141)
+init <- c(-2.2403, -5.2734, 1.7934, 3.9026, 4.1966, 2.6475, 1.7147, 2.032, 
+          0.7888, -0.1281, -0.2629, -0.4078, 0.0032, 0.8361, 1.9041, 2.8168, 
+          -4.4402)
 system.time(fit1890.1 <- optimObjective(stratifiedData[[1]],sp01=0.1,sp12=1,hessian=TRUE))
 str(fit1890.1)
 with(fit1890.1, pnegll(par))
 with(fit1890.1, dput(round(par,4)))
-
 diag(solve(fit1890.1$hessian))
 ##
 ## coef.nlminb <- coef(fit1890.1)
@@ -926,15 +930,13 @@ display <- function(fit,df01=2,df12=2) {
     cat(sprintf("alpha20=%f (95%% CI: %f, %f)\n",alpha20$est,alpha20$lower,alpha20$upper))
     invisible(list(ages=ages,a01=a01,sd01=sd01,a12=a12,sd12=sd12,alpha20=alpha20))
 }
-par(mfrow=c(2,2))
-display(out[[5]])
-display(out[[21+5]])
-
 ## display results from HPC
 ## system("ssh mc2495@omega.hpc.yale.edu `cd ~/src/R/purged/test; ./submit_cluster.sh`")
 ## system("scp mc2495@omega.hpc.yale.edu:~/src/R/purged/test/out-20140528.RData ~/src/R/purged/test/")
-load("~/src/R/purged/test/out-20140528.RData")
-load("~/src/R/purged/test/out-20150502-full.RData")
+##load("~/src/R/purged/test/out-20140528.RData")
+##load("~/src/R/purged/test/out-20150502-full.RData")
+load("~/src/R/purged/test/out-20150818-ns.RData")
+out <- lapply(1:42, function(j) { new <- lapply(1:8,function(i) out[i,j][[1]]); names(new) <- rownames(out); new})
 load(file="~/src/R/purged/test/smokingList-20140528.RData")
 strata <- transform(expand.grid(from=seq(1890,1990,by=5),sex=1:2),
                     to=from+4)
@@ -958,9 +960,14 @@ summ.1 <- subset(summ,sex==1)
 summ.2 <- subset(summ,sex==2)
 summ.1 <- subset(summ,sex==1 & cohort<=1950)
 summ.2 <- subset(summ,sex==2 & cohort<=1950)
+par(mfrow=c(2,2))
+display(out[[5]])
+display(out[[21+5]])
+
 
 require(lattice)
 require(mgcv)
+require(dplyr)
 d <- mutate(summ.1,year=cohort+ages,loga01=log(a12)) %>% filter(year<=2010 & ages>=10)
 fit1 <- gam(loga01~s(ages,year),data=d,sp=1e-2); fit1$sp
 plot(fit1, pers=TRUE)
