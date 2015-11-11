@@ -33,6 +33,7 @@ namespace { // anonymous
   public:
     virtual double calc(double t, gsl_vector * beta, bool nocentering = false) = 0;
     virtual void calcBasis(double x, gsl_vector * basis, bool nocentering = false) = 0;
+    virtual ~splineBasis() {}
   };
   // enum's cause problems with RcppGSL::vector, so instead we use int's 
   int Never=0, Current=1, Former=2, Reclassified=3, Death=4; // Issue: Death=3 or Death=4?
@@ -300,15 +301,15 @@ namespace { // anonymous
     gsl_odeiv2_system sys;
     gsl_odeiv2_driver *d;
     // data fields
-    RcppGSL::vector<int> recall;
+    RcppGSL::vector<int> recall, finalState;
     RcppGSL::vector<double> 
-    finalState, time1, time2, time3, freq, beta01, beta12, ages0, mu0, mu1, mu2;
+    time1, time2, time3, freq, beta01, beta12, ages0, mu0, mu1, mu2;
     Purged(SEXP sexp, int N, int Nbeta01, int Nbeta12, int Nages0) : 
       recall(N), finalState(N), time1(N), time2(N), time3(N), freq(N), beta01(Nbeta01), 
       beta12(Nbeta12), ages0(Nages0), mu0(Nages0), mu1(Nages0), mu2(Nages0) {
       List args = as<List>(sexp);
       debug = args("debug");
-      finalState = args("finalState"); 
+      finalState = args["finalState"]; 
       recall = args("recall");
       time1 = args("time1"); 
       time2 = args("time2"); 
@@ -344,6 +345,7 @@ namespace { // anonymous
     }
     virtual ~Purged() {
       finalState.free();
+      recall.free();
       time1.free();
       time2.free();
       time3.free();
@@ -485,30 +487,27 @@ namespace { // anonymous
   class PurgedNS : public Purged {
   public:
     RcppGSL::vector<double> knots01, knots12;
-    ns *ns01, *ns12;
     PurgedNS(SEXP sexp, int N, int Nbeta01, int Nbeta12, int Nages0, int Nknots01, int Nknots12) : 
       Purged(sexp, N, Nbeta01, Nbeta12, Nages0), knots01(Nknots01), knots12(Nknots12) {
       List args = as<List>(sexp);
       knots01 = args("knots01"); 
       knots12 = args("knots12"); 
       // initial parameters for initiation
-      ns01 = new ns(knots01, 
+      s01 = new ns(knots01, 
 		   false, // intercept
 		   true, // centred
 		   20.0 // centre
 		   );
       // knots for cessation
-      ns12 = new ns(knots12, 
+      s12 = new ns(knots12, 
 		   false, // intercept
 		   true, // centred
 		   40.0 // centre
 		   );
-      s01 = (splineBasis *) ns01;
-      s12 = (splineBasis *) ns12;
     }
-    ~PurgedNS() {
-      delete ns01; 
-      delete ns12;
+    virtual ~PurgedNS() {
+      delete s01; 
+      delete s12;
       knots01.free();
       knots12.free();
     }
@@ -516,7 +515,6 @@ namespace { // anonymous
 
   class PurgedPS : public Purged {
   public:
-    ps *ps01, *ps12;
     RcppGSL::matrix<double> pmatrix01, pmatrix12;
     double lower01, upper01, sp01, lower12, upper12, sp12;
     int nterm01, nterm12;
@@ -534,53 +532,41 @@ namespace { // anonymous
       sp12 = args("sp12");
       nterm01 = args("nterm01");
       nterm12 = args("nterm12");
-      ps * ps01 = new ps(lower01, // lower boundary
-			upper01, // upper boundary
-			false, // intercept
-			true, // centred
-			20.0, // centre
-			nterm01 // nterm
-			);
+      s01 = new ps(lower01, // lower boundary
+		   upper01, // upper boundary
+		   false, // intercept
+		   true, // centred
+		   20.0, // centre
+		   nterm01 // nterm
+		   );
       // knots for cessation
-      ps * ps12 = new ps(lower12,
-			upper12,
-			false, // intercept
-			true, // centred
-			40.0, // centre
-			nterm12
-			);
-      s01 = (splineBasis *) ps01;
-      s12 = (splineBasis *) ps12;
-      if (debug) {
-	gsl_vector_Rprintf(ps01->knots);
-	Rprintf("\n");
-	gsl_vector_Rprintf(ps12->knots);
-	Rprintf("\n");
-      }
+      s12 = new ps(lower12,
+		   upper12,
+		   false, // intercept
+		   true, // centred
+		   40.0, // centre
+		   nterm12
+		   );
     }
     double negll() {
       double pnegll = Purged::negll();
-      gsl_vector *v01;
-      double penalty01=0.0;
+      gsl_vector *v01, *v12;
+      double penalty01=0.0, penalty12=0.0;
       v01 = gsl_vector_alloc(beta01->size);
       gsl_blas_dgemv(CblasNoTrans, 1.0, pmatrix01, beta01, 0.0, v01);
       gsl_blas_ddot(beta01,v01,&penalty01);
-      gsl_vector_free(v01);
       pnegll += penalty01 * sp01/2.0; // add positive penalty
-      gsl_vector *v12;
-      double penalty12=0.0;
       v12 = gsl_vector_alloc(beta12->size);
       gsl_blas_dgemv(CblasNoTrans, 1.0, pmatrix12, beta12, 0.0, v12);
       gsl_blas_ddot(beta12,v12,&penalty12);
-      gsl_vector_free(v12);
       pnegll += penalty12 * sp12/2.0; // add positive penalty
       // tidy up
       gsl_vector_free(v01);
       gsl_vector_free(v12);
       return pnegll;
     }
-    ~PurgedPS() {
-      delete ps01; delete ps12;
+    virtual ~PurgedPS() {
+      delete s01; delete s12;
       pmatrix01.free(); pmatrix12.free();
     }
   };
@@ -627,6 +613,9 @@ namespace { // anonymous
   RcppExport
   SEXP call_purged_ns(SEXP sexp) {
     List args = as<List>(sexp);
+    bool debug = as<bool>(args("debug"));
+    if (debug)
+      Rprintf("N=%i\n",as<int>(args("N")));
     PurgedNS model(sexp, 
 		   as<int>(args("N")), 
 		   as<int>(args("Nbeta01")),
@@ -639,6 +628,9 @@ namespace { // anonymous
   RcppExport
   SEXP call_purged_ps(SEXP sexp) {
     List args = as<List>(sexp);
+    bool debug = as<bool>(args("debug"));
+    if (debug)
+      Rprintf("N=%i\n",as<int>(args("N")));
     PurgedPS model(sexp,
 		   as<int>(args("N")), 
 		   as<int>(args("Nbeta01")),

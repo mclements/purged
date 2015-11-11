@@ -72,6 +72,55 @@ stratifiedData <- lapply(1:nrow(strata), function(i) {
                 smokingCohort>=strata$from[i] & smokingCohort<=strata$to[i]]
 })
 
+## test ns
+test <- function(callName="call_purged_ns",init,stratum) {
+    obj <- stratum[[1]]
+    nterm01 <- 2
+    nterm12 <- 2
+    P <- function(beta) {
+        int01 <- beta[i <- 1]
+        int12 <- beta[i <- i+1]
+        beta01 <- beta[(i+1):(i <- i+nterm01)]
+        beta12 <- beta[(i+1):(i <- i+nterm12)]
+        beta20 <- beta[i <- i+1]
+        ## do.call("sum",
+        ##         mclapply(stratum, function(obj) {
+                    smoking <- obj$smoking[1:5,]
+                    mort <- obj$mort
+                    .Call(callName,
+                          list(finalState=as.integer(smoking$smkstat - 1), 
+                               recall=as.integer(smoking$recall),
+                               time1=smoking$agestart,
+                               time2=smoking$agequit,
+                               time3=smoking$age, # age observed
+                               freq=smoking$freq, # frequency (as double)
+                               int01=int01,
+                               int12=int12,
+                               beta01=beta01,
+                               beta12=beta12,
+                               beta20=beta20,
+                               ages0=mort$age,
+                               mu0=mort$Never,
+                               mu1=mort$Current,
+                               mu2=mort$Former,
+                               N=nrow(smoking),
+                               knots01=c(10,20,30),
+                               knots12=c(20,40,60),
+                               Nages0=length(mort$age),
+                               Nbeta01=length(beta01),
+                               Nbeta12=length(beta12),
+                               debug=TRUE), # debug
+                          package="purged")
+                ## }, mc.cores=2))
+    }
+    ## return(pnegll(init))
+    return(P(init))
+}
+init <- c(-1.91166383109674, -4.86139268487933, 3.84976690180782, 0.445314035540679, 
+          -0.344483039469035, 0.979805469221358, -3.53232595501467)
+##debug(test)
+system.time(temp3 <- test("call_purged_ns",init,stratifiedData[[10]]))
+
 test <- function(callName="call_purged_ps",init,stratum,sp01=0.1,sp12=1) {
     obj <- stratum[[1]]
     nterm01 <- nterm12 <- 5
@@ -86,7 +135,7 @@ test <- function(callName="call_purged_ps",init,stratum,sp01=0.1,sp12=1) {
                     smoking <- obj$smoking[1:5,]
                     mort <- obj$mort
                     .Call(callName,
-                          list(finalstate=as.integer(smoking$smkstat - 1), 
+                          list(finalState=as.integer(smoking$smkstat - 1), 
                                recall=as.integer(smoking$recall),
                                time1=smoking$agestart,
                                time2=smoking$agequit,
@@ -130,8 +179,8 @@ init <- c(-3,
 init <- c(-2.2084, -5.2397, 1.7865, 3.9082, 4.2282, 2.6938, 1.7596, 2.0776, 
           0.8403, -0.5627, -0.9299, -1.105, -0.6869, 0.1301, 1.1833, 2.0894, 
           -4.3141)
+##debug(test)
 system.time(temp3 <- test("call_purged_ps",init,stratifiedData[[10]],sp01=0.1,sp12=1))
-
 
 
 test <- function(callName="gsl_main2ReclassifiedPS",init,stratum,sp01=0.1,sp12=1) {
@@ -187,6 +236,7 @@ temp3$negll
 temp2$pnegll
 temp3$pnegll
 head(stratifiedData[[10]][[1]]$smoking)
+
 
 ## Reimplement the example in R
 require(splines)
