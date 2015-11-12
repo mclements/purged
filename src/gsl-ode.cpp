@@ -309,7 +309,7 @@ namespace { // anonymous
     bool debug;
     // Params fields
     double int01, int12, beta20, maxage;
-    size_t nstate, ncoef;
+    size_t nstate, ncoef, nbeta01, nbeta12;
     gsl_spline *spline0, *spline1, *spline2;
     gsl_interp_accel *acc0, *acc1, *acc2;
     splineBasis *s01;
@@ -322,9 +322,10 @@ namespace { // anonymous
     RcppGSL::vector<int> recall, finalState;
     Vector 
     time1, time2, time3, freq, beta01, beta12, ages0, mu0, mu1, mu2;
-    Purged(SEXP sexp, int N, int Nbeta01, int Nbeta12, int Nages0) : 
-      recall(N), finalState(N), time1(N), time2(N), time3(N), freq(N), beta01(Nbeta01), 
-      beta12(Nbeta12), ages0(Nages0), mu0(Nages0), mu1(Nages0), mu2(Nages0), nstate(4), ncoef(3+Nbeta01+Nbeta12) {
+    Purged(SEXP sexp, int N, int nbeta01, int nbeta12, int Nages0) : 
+      nstate(4), ncoef(3+nbeta01+nbeta12), nbeta01(nbeta01), nbeta12(nbeta12),
+      recall(N), finalState(N), time1(N), time2(N), time3(N), freq(N), beta01(nbeta01), 
+      beta12(nbeta12), ages0(Nages0), mu0(Nages0), mu1(Nages0), mu2(Nages0) {
       List args = as<List>(sexp);
       debug = args("debug");
       finalState = args("finalState"); 
@@ -492,35 +493,35 @@ namespace { // anonymous
       gsl_vector_set_all(out, 0.0);
       if (i+1 != j) return out;
       Vector x01(ncoef), x12(ncoef), x20(ncoef);
-      Vector _beta01(Nbeta01), _beta12(Nbeta12);
+      Vector _beta01(nbeta01), _beta12(nbeta12);
       int k = 0;
       // initialise vectors to zero
       gsl_vector_set_all(x01,0.0);
       gsl_vector_set_all(x12,0.0);
       gsl_vector_set_all(x20,0.0);
       // calculate design vectors for the splines
-      P->s01->calcBasis(t, _beta01);
-      P->s12->calcBasis(t, _beta12);
+      s01->calcBasis(t, _beta01);
+      s12->calcBasis(t, _beta12);
       // set theta and x 
       // intercept
       x01[k++] = 1;
       // spline parameters
-      for (size_t n = 0; n<Nbeta01; ++n) {
+      for (size_t n = 0; n<nbeta01; ++n) {
 	x01[k++]=_beta01[n];
       }
       // intercept
       x12[k++] = 1;
       // spline parameters
-      for (size_t n = 0; n<Nbeta12; ++n) {
+      for (size_t n = 0; n<nbeta12; ++n) {
 	x12[k++] = _beta12[n];
       }
       x20[k++] = 1;
       // d/dt (partial P(s,t)/partial theta) = (partial P(s,t)/partial theta)*alpha + P(s,t)(partial alpha / partial theta)
-      if (i==Never & j==Current) 
+      if (i==Never && j==Current) 
 	return x01;
-      if (i==Current & j==Former)
+      if (i==Current && j==Former)
 	return x12;
-      if (i==Former & j==Reclassified)
+      if (i==Former && j==Reclassified)
 	return x20;
       REprintf("Unexpected combinations of states in rmu_ij: %i to %j.\n",i,j);
       return out;
@@ -566,7 +567,7 @@ namespace { // anonymous
 	      (P_ij(Never,Never,0.0,u)+P_ij(Never,Reclassified,0.0,u)); // ignore s and t
 	if (state == Current)
 	  for (size_t k=0; k<ncoef; ++k)
-	    gradient[k] = dP_ij_report(Never,Never,0.0,s)[k] / P_ij(Never,Never,0.0,s)+
+	    gradient[k] = dP_ij(Never,Never,0.0,s)[k] / P_ij(Never,Never,0.0,s)+
 	      rmu_ij(Never,Current,s)[k]+
 	      dP_ij(Current,Current,s,u)[k]/P_ij(Current,Current,s,u); // ignore t
 	if (state == Former)
@@ -583,15 +584,15 @@ namespace { // anonymous
       }
       if (recall == FormerWithCessation && state == Former) {// recall of age quit (not initiation) for former smokers
 	for (size_t k=0; k<ncoef; ++k)
-	  gradient[k] = dP_ij(Never,Current,0.0,t)/P_ij(Never,Current,0.0,t) + 
+	  gradient[k] = dP_ij(Never,Current,0.0,t)[k]/P_ij(Never,Current,0.0,t) + 
 	    rmu_ij(Current,Former,t)[k]+
 	    dP_ij(Former,Former,t,u)[k]/P_ij(Former,Former,t,u); // ignores s
       }
-      if (ll == 0.0) REprintf("ll==0.0? (state=%i, recall=%i)\n",state,recall);
+      // if (ll == 0.0) REprintf("ll==0.0? (state=%i, recall=%i)\n",state,recall);
       for (size_t k=0; k<ncoef; ++k)
-	gradient[k] -= dP_iK(Never,0.0,u)[k] / P_iK(Never,0.0,u);
+	gradient[k] = gradient[k] - dP_iK(Never,0.0,u)[k] / P_iK(Never,0.0,u);
       for (size_t k=0; k<ncoef; ++k)
-	gradient[k] *= -freq;
+	gradient[k] = -gradient[k]*freq;
       return gradient;
     }
     Vector
@@ -639,8 +640,8 @@ namespace { // anonymous
 
   class PurgedNS : public Purged {
   public:
-    PurgedNS(SEXP sexp, int N, int Nbeta01, int Nbeta12, int Nages0) : 
-      Purged(sexp, N, Nbeta01, Nbeta12, Nages0) {
+    PurgedNS(SEXP sexp, int N, int nbeta01, int nbeta12, int Nages0) : 
+      Purged(sexp, N, nbeta01, nbeta12, Nages0) {
       List args = as<List>(sexp);
       // initial parameters for initiation
       s01 = new ns(as<Vector>(args("knots01")), 
@@ -665,9 +666,9 @@ namespace { // anonymous
   public:
     RcppGSL::matrix<double> pmatrix01, pmatrix12;
     double sp01, sp12;
-    PurgedPS(SEXP sexp, int N, int Nbeta01, int Nbeta12, int Nages0) : 
-      Purged(sexp, N, Nbeta01, Nbeta12, Nages0), 
-      pmatrix01(Nbeta01,Nbeta01), pmatrix12(Nbeta12, Nbeta12) {
+    PurgedPS(SEXP sexp, int N, int nbeta01, int nbeta12, int Nages0) : 
+      Purged(sexp, N, nbeta01, nbeta12, Nages0), 
+      pmatrix01(nbeta01,nbeta01), pmatrix12(nbeta12, nbeta12) {
       List args = as<List>(sexp);
       pmatrix01 = args("pmatrix01");
       pmatrix12 = args("pmatrix12");
@@ -764,7 +765,7 @@ namespace { // anonymous
     double dalpha01, dalpha12, dalpha20;
     Purged* P = static_cast<Purged*>(params);
     Vector x01(P->ncoef), x12(P->ncoef), x20(P->ncoef);
-    Vector _beta01(P->Nbeta01), _beta12(P->Nbeta12);
+    Vector _beta01(P->nbeta01), _beta12(P->nbeta12);
     int j = 0;
     // initialise vectors to zero
     gsl_vector_set_all(x01,0.0);
@@ -777,13 +778,13 @@ namespace { // anonymous
     // intercept
     x01[j++] = 1;
     // spline parameters
-    for (size_t i = 0; i < P->Nbeta01; ++i) {
+    for (size_t i = 0; i < P->nbeta01; ++i) {
       x01[j++] = _beta01[i];
     }
     // intercept
     x12[j++] = 1;
     // spline parameters
-    for (size_t i = 0; i < P->Nbeta12; ++i) {
+    for (size_t i = 0; i < P->nbeta12; ++i) {
       x12[j++] = _beta12[i];
     }
     x20[j++] = 1;
@@ -800,7 +801,7 @@ namespace { // anonymous
     f[Former] = alpha12*y[Current]-(alpha20+mu2-mu0)*y[Former];
     f[Reclassified] = alpha20*y[Former];
     // d/dt (partial P(s,t)/partial theta) = (partial P(s,t)/partial theta)*alpha + P(s,t)(partial alpha / partial theta)
-    for (int offset=4, i=0; i < P->ncoef; ++i, offset += 4) {
+    for (int offset=4, i=0; i < (int) P->ncoef; ++i, offset += 4) {
       dalpha01 = alpha01 * x01[i];
       dalpha12 = alpha12 * x12[i];
       dalpha20 = alpha20 * x20[i];
@@ -817,22 +818,22 @@ namespace { // anonymous
   RcppExport
   SEXP call_purged_ns(SEXP sexp) {
     List args = as<List>(sexp);
-    bool debug = as<bool>(args("debug"));
+    // bool debug = as<bool>(args("debug"));
     PurgedNS model(sexp, 
 		   as<int>(args("N")), 
-		   as<int>(args("Nbeta01")),
-		   as<int>(args("Nbeta12")),
+		   as<int>(args("nbeta01")),
+		   as<int>(args("nbeta12")),
 		   as<int>(args("Nages0")));
     return wrap(model.negll());
   }
   RcppExport
   SEXP call_purged_ps(SEXP sexp) {
     List args = as<List>(sexp);
-    bool debug = as<bool>(args("debug"));
+    // bool debug = as<bool>(args("debug"));
     PurgedPS model(sexp,
 		   as<int>(args("N")), 
-		   as<int>(args("Nbeta01")),
-		   as<int>(args("Nbeta12")),
+		   as<int>(args("nbeta01")),
+		   as<int>(args("nbeta12")),
 		   as<int>(args("Nages0")));
     return wrap(model.negll());
   }
