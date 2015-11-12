@@ -24,6 +24,7 @@ namespace { // anonymous
   // declare types
   typedef boost::tuple<int,int,double,double> P_ij_key;
   typedef RcppGSL::vector<double> Vector;
+  typedef std::map<P_ij_key,Vector> dP_ij_t;
   //forward declaration(s)
   int funcReclassified (double t, const double y[], double f[],
 			void *model);
@@ -421,7 +422,7 @@ namespace { // anonymous
     dP_ij(int i, int j, double s, double t) {
       // do we have the values cached?
       P_ij_key key = P_ij_key(i,j,s,t);
-      if (dP_ijs.count(key)>0) return dP_ijs[key];
+      if (dP_ijs.find(key) != dP_ijs.end()) return dP_ijs.find(key)->second;
       // otherwise...
       extended_sys();
       size_t dimension = (ncoef+1)*nstate;
@@ -440,9 +441,9 @@ namespace { // anonymous
 	  out[m] = y[m+k*(ncoef+1)];
 	P_ij_key key_ik = P_ij_key(i,k,s,t);
 	P_ijs[key_ik] = y[k];
-	dP_ijs[key_ik] = out;
+	dP_ijs.insert(dP_ij_t::value_type(key_ik, out));
       }
-      return dP_ijs[key];
+      return dP_ijs.find(key)->second;
     }
     Vector dP_iK(int i, double s, double t) {
       Vector total(ncoef);
