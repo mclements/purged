@@ -30,7 +30,7 @@ namespace { // anonymous
 			void *model);
   int funcReclassifiedB (double t, const double y[], double f[],
 			   void *model);
-  int funcReclassifiedExtended (double t, const double y[], double f[], void *params);
+  int funcReclassifiedExtended (double t, const double y[], double f[], void *model);
   // Base class for splines
   class splineBasis {
   public:
@@ -303,7 +303,8 @@ namespace { // anonymous
     gsl_vector *knots, *B, *xv, *nsC, *_basis;
   };
 
-  /** @brief Base class for purged Markov chains
+  /** @brief Base class for purged Markov chains to model smoking.
+      It is specialised for smoking, including the data fields, the smoothers 
    **/
   class Purged {
   public:
@@ -323,10 +324,10 @@ namespace { // anonymous
     RcppGSL::vector<int> recall, finalState;
     Vector 
     time1, time2, time3, freq, beta01, beta12, ages0, mu0, mu1, mu2;
-    Purged(SEXP sexp, int N, int nbeta01, int nbeta12, int Nages0) : 
+    Purged(SEXP sexp, int N, int nbeta01, int nbeta12, int nages0) : 
       nstate(4), ncoef(3+nbeta01+nbeta12), nbeta01(nbeta01), nbeta12(nbeta12),
       recall(N), finalState(N), time1(N), time2(N), time3(N), freq(N), beta01(nbeta01), 
-      beta12(nbeta12), ages0(Nages0), mu0(Nages0), mu1(Nages0), mu2(Nages0) {
+      beta12(nbeta12), ages0(nages0), mu0(nages0), mu1(nages0), mu2(nages0) {
       List args = as<List>(sexp);
       debug = args("debug");
       finalState = args("finalState"); 
@@ -398,7 +399,7 @@ namespace { // anonymous
       if (P_ijs.count(key)>0) return P_ijs[key];
       // otherwise...
       default_sys();
-      double y[nstate];
+      double y[sys.dimension];
       for (size_t k=0; k<nstate; ++k)
 	y[k] = 0.0;
       y[i] = 1.0;
@@ -412,9 +413,8 @@ namespace { // anonymous
       return y[j];
     }
     double P_iK(int i, double s, double t) {
-      size_t dimension = d->sys->dimension;
       double total = 0.0;
-      for (size_t k=0; k<dimension; ++k)
+      for (size_t k=0; k<nstate; ++k)
 	total += P_ij(i,k,s,t);
       return total;
     }
@@ -425,9 +425,8 @@ namespace { // anonymous
       if (dP_ijs.find(key) != dP_ijs.end()) return dP_ijs.find(key)->second;
       // otherwise...
       extended_sys();
-      size_t dimension = (ncoef+1)*nstate;
-      double y[dimension];
-      for (size_t k=0; k<dimension; ++k)
+      double y[sys.dimension];
+      for (size_t k=0; k<sys.dimension; ++k)
 	y[k] = 0.0;
       y[i] = 1.0;
       double tm = s;
@@ -437,10 +436,10 @@ namespace { // anonymous
       // cache the results
       for (size_t k=0; k<nstate; ++k) { // state
 	Vector out(ncoef);
-	for (size_t m=0; m<ncoef; ++m) 
-	  out[m] = y[m+k*(ncoef+1)];
 	P_ij_key key_ik = P_ij_key(i,k,s,t);
 	P_ijs[key_ik] = y[k];
+	for (size_t m=0; m<ncoef; ++m) 
+	  out[m] = y[nstate*(m+1)+k]; // (y, P1', P2', ..., Pncoef')
 	dP_ijs.insert(dP_ij_t::value_type(key_ik, out));
       }
       return dP_ijs.find(key)->second;
@@ -527,7 +526,6 @@ namespace { // anonymous
       REprintf("Unexpected combinations of states in rmu_ij: %i to %j.\n",i,j);
       return out;
     }
-
     double negll_component(int state, double s, double t, double u, double freq = 1.0, int recall = 1) {
       double ll = 0.0;
       if (recall == Recall) { // recall of smoking history available
@@ -641,8 +639,8 @@ namespace { // anonymous
 
   class PurgedNS : public Purged {
   public:
-    PurgedNS(SEXP sexp, int N, int nbeta01, int nbeta12, int Nages0) : 
-      Purged(sexp, N, nbeta01, nbeta12, Nages0) {
+    PurgedNS(SEXP sexp, int N, int nbeta01, int nbeta12, int nages0) : 
+      Purged(sexp, N, nbeta01, nbeta12, nages0) {
       List args = as<List>(sexp);
       // initial parameters for initiation
       s01 = new ns(as<Vector>(args("knots01")), 
@@ -667,8 +665,8 @@ namespace { // anonymous
   public:
     RcppGSL::matrix<double> pmatrix01, pmatrix12;
     double sp01, sp12;
-    PurgedPS(SEXP sexp, int N, int nbeta01, int nbeta12, int Nages0) : 
-      Purged(sexp, N, nbeta01, nbeta12, Nages0), 
+    PurgedPS(SEXP sexp, int N, int nbeta01, int nbeta12, int nages0) : 
+      Purged(sexp, N, nbeta01, nbeta12, nages0), 
       pmatrix01(nbeta01,nbeta01), pmatrix12(nbeta12, nbeta12) {
       List args = as<List>(sexp);
       pmatrix01 = args("pmatrix01");
@@ -758,36 +756,37 @@ namespace { // anonymous
    **/
   int
   funcReclassifiedExtended (double t, 
-			    const double y[],   // dimension: 4*(ntheta+1)
-			    double f[],         // dimension: 4*(ntheta+1)
-			    void *params)       // type: Param*
+			    const double y[],   // dimension: nstate*(ncoef+1)
+			    double f[],         // dimension: nstate*(ncoef+1)
+			    void *model)       // type: Param*
   {
     double alpha01, alpha12, alpha20, mu0, mu1, mu2;
     double dalpha01, dalpha12, dalpha20;
-    Purged* P = static_cast<Purged*>(params);
+    Purged* P = static_cast<Purged*>(model);
     Vector x01(P->ncoef), x12(P->ncoef), x20(P->ncoef);
-    Vector _beta01(P->nbeta01), _beta12(P->nbeta12);
+    Vector basis01(P->nbeta01), basis12(P->nbeta12);
     int j = 0;
     // initialise vectors to zero
     gsl_vector_set_all(x01,0.0);
     gsl_vector_set_all(x12,0.0);
     gsl_vector_set_all(x20,0.0);
     // calculate design vectors for the splines
-    P->s01->calcBasis(t, _beta01);
-    P->s12->calcBasis(t, _beta12);
+    P->s01->calcBasis(t, basis01);
+    P->s12->calcBasis(t, basis12);
     // set x 
-    // intercept
+    // intercept for 0->1
     x01[j++] = 1;
-    // spline parameters
+    // spline parameters for 0->1
     for (size_t i = 0; i < P->nbeta01; ++i) {
-      x01[j++] = _beta01[i];
+      x01[j++] = basis01[i];
     }
-    // intercept
+    // intercept for 1->2
     x12[j++] = 1;
-    // spline parameters
+    // spline parameters for 1->2
     for (size_t i = 0; i < P->nbeta12; ++i) {
-      x12[j++] = _beta12[i];
+      x12[j++] = basis12[i];
     }
+    // intercept for 2->0
     x20[j++] = 1;
     // calculate rates
     alpha01 = P->mu_ij(Never,Current,t);
@@ -802,17 +801,20 @@ namespace { // anonymous
     f[Former] = alpha12*y[Current]-(alpha20+mu2-mu0)*y[Former];
     f[Reclassified] = alpha20*y[Former];
     // d/dt (partial P(s,t)/partial theta) = (partial P(s,t)/partial theta)*alpha + P(s,t)(partial alpha / partial theta)
-    for (int offset=4, i=0; i < (int) P->ncoef; ++i, offset += 4) {
+    for (int offset=P->nstate, i=0; i < (int) P->ncoef; ++i, offset += P->nstate) {
       dalpha01 = alpha01 * x01[i];
       dalpha12 = alpha12 * x12[i];
       dalpha20 = alpha20 * x20[i];
       f[Never+offset] = - (alpha01*y[Never+offset] + dalpha01*y[Never]);
       f[Current+offset] = alpha01*y[Never+offset] + dalpha01*y[Never] -
 	((alpha12+mu1-mu0)*y[Current+offset] + dalpha12*y[Current]);
-      f[Former+offset] = (alpha12+mu2-mu0)*y[Current+offset]+dalpha12*y[Current] -
+      f[Former+offset] = alpha12*y[Current+offset]+dalpha12*y[Current] -
 	((alpha20+mu2-mu0)*y[Former+offset] + dalpha20*y[Former]);
       f[Reclassified+offset] = alpha20*y[Former+offset] + dalpha20*y[Former];
     }
+    // tidy up - is this strictly needed?
+    x01.free(); x12.free(); x20.free();
+    basis01.free(); basis12.free();
     return GSL_SUCCESS;
   }
 
@@ -824,8 +826,18 @@ namespace { // anonymous
 		   as<int>(args("N")), 
 		   as<int>(args("nbeta01")),
 		   as<int>(args("nbeta12")),
-		   as<int>(args("Nages0")));
-    return wrap(model.negll());
+		   as<int>(args("nages0")));
+    std::string output_type = args("output_type");
+    if (output_type == "negll")
+      return wrap(model.negll());
+    if (output_type == "negll_gradient")
+      return wrap(model.negll_gradient());
+    if (output_type == "P_ij")
+      return wrap(model.P_ij(Never,Reclassified,0.0, 50.0));
+    if (output_type == "dP_ij")
+      return wrap(model.dP_ij(Never,Reclassified,0.0, 50.0));
+    Rprintf("call_purged_ns: output_type not matched (\"%s\").\n",output_type.c_str());
+    return wrap(model.negll()); // default
   }
   RcppExport
   SEXP call_purged_ps(SEXP sexp) {
@@ -835,7 +847,13 @@ namespace { // anonymous
 		   as<int>(args("N")), 
 		   as<int>(args("nbeta01")),
 		   as<int>(args("nbeta12")),
-		   as<int>(args("Nages0")));
+		   as<int>(args("nages0")));
+    std::string output_type = args("output_type");
+    if (output_type == "negll")
+      return wrap(model.negll());
+    if (output_type == "negll_gradient")
+      return wrap(model.negll_gradient());
+    Rprintf("call_purged_ps: output_type not matched (%s)\n",output_type.c_str());
     return wrap(model.negll());
   }
 

@@ -1,3 +1,4 @@
+refresh
 ## read in the data
 if (doOnce <- FALSE) {
     setwd("~/Documents/clients/ted")
@@ -73,14 +74,14 @@ stratifiedData <- lapply(1:nrow(strata), function(i) {
 })
 
 ## test ns
-test <- function(callName="call_purged_ns",init,stratum) {
+test <- function(callName="call_purged_ns",init,stratum,output_type="negll",debug=FALSE) {
     obj <- stratum[[1]]
     nterm01 <- 2
     nterm12 <- 2
     P <- function(beta) {
         int01 <- beta[i <- 1]
-        int12 <- beta[i <- i+1]
         beta01 <- beta[(i+1):(i <- i+nterm01)]
+        int12 <- beta[i <- i+1]
         beta12 <- beta[(i+1):(i <- i+nterm12)]
         beta20 <- beta[i <- i+1]
         ## do.call("sum",
@@ -106,28 +107,46 @@ test <- function(callName="call_purged_ns",init,stratum) {
                                N=nrow(smoking),
                                knots01=c(10,20,30),
                                knots12=c(20,40,60),
-                               Nages0=length(mort$age),
-                               Nbeta01=length(beta01),
-                               Nbeta12=length(beta12),
-                               debug=TRUE), # debug
+                               nages0=length(mort$age),
+                               nbeta01=length(beta01),
+                               nbeta12=length(beta12),
+                               output_type=output_type,
+                               debug=debug), 
                           package="purged")
                 ## }, mc.cores=2))
     }
     ## return(pnegll(init))
     return(P(init))
 }
-init <- c(-1.91166383109674, -4.86139268487933, 3.84976690180782, 0.445314035540679, 
-          -0.344483039469035, 0.979805469221358, -3.53232595501467)
+init <- c(-1.91166383109674, 3.84976690180782, 0.445314035540679,
+          -4.86139268487933, -0.344483039469035, 0.979805469221358,
+          -3.53232595501467)
 ##debug(test)
-system.time(temp3 <- test("call_purged_ns",init,stratifiedData[[10]]))
+## system.time(temp3 <- test("call_purged_ns",init=init,stratum=stratifiedData[[10]]))
+
+test("call_purged_ns",init,stratum=stratifiedData[[10]],output_type="P_ij")
+
+## compare finite-differences with calculated gradients
+dbeta <- function(x,i,scale,eps=1e-4) { x[i] <- x[i]+scale*eps; x }
+dtest <- function(...,beta=init,i=1,eps=1e-4)
+    (test(...,init=dbeta(beta,i,scale=1,eps=eps)) -
+     test(...,init=dbeta(beta,i,scale=-1,eps=eps))) / (2*eps)
+## sapply(1:7, function(i)
+##        dtest("call_purged_ns",stratum=stratifiedData[[10]],i=i))
+## test("call_purged_ns",init=init,stratum=stratifiedData[[10]],output_type="negll_gradient")
+## FAIL: estimates are different
+zapsmall(sapply(1:7, function(i)
+                dtest("call_purged_ns",beta=init,stratum=stratifiedData[[10]],
+                      output_type="P_ij",i=i)))
+test("call_purged_ns",init=init,stratum=stratifiedData[[10]],output_type="dP_ij")
 
 test <- function(callName="call_purged_ps",init,stratum,sp01=0.1,sp12=1) {
     obj <- stratum[[1]]
     nterm01 <- nterm12 <- 5
     P <- function(beta) {
         int01 <- beta[i <- 1]
-        int12 <- beta[i <- i+1]
         beta01 <- beta[(i+1):(i <- i+nterm01+2)]
+        int12 <- beta[i <- i+1]
         beta12 <- beta[(i+1):(i <- i+nterm12+2)]
         beta20 <- beta[i <- i+1]
         ## do.call("sum",
@@ -161,9 +180,10 @@ test <- function(callName="call_purged_ps",init,stratum,sp01=0.1,sp12=1) {
                                mu1=mort$Current,
                                mu2=mort$Former,
                                N=nrow(smoking),
-                               Nages0=length(mort$age),
-                               Nbeta01=length(beta01),
-                               Nbeta12=length(beta12),
+                               nages0=length(mort$age),
+                               nbeta01=length(beta01),
+                               nbeta12=length(beta12),
+                               output_type="negll_gradient",
                                debug=TRUE), # debug
                           package="purged")
                 ## }, mc.cores=2))
@@ -172,15 +192,20 @@ test <- function(callName="call_purged_ps",init,stratum,sp01=0.1,sp12=1) {
     return(P(init))
 }
 init <- c(-3,
+          rep(0.1,5+2),
           -4,
           rep(0.1,5+2),
-          rep(0.1,5+2),
           log(0.01))
-init <- c(-2.2084, -5.2397, 1.7865, 3.9082, 4.2282, 2.6938, 1.7596, 2.0776, 
-          0.8403, -0.5627, -0.9299, -1.105, -0.6869, 0.1301, 1.1833, 2.0894, 
+init <- c(-2.2084,
+          1.7865, 3.9082, 4.2282, 2.6938, 1.7596, 2.0776, 0.8403, -0.5627,
+          -5.2397,
+          -0.9299, -1.105, -0.6869, 0.1301, 1.1833, 2.0894, 
           -4.3141)
 ##debug(test)
 system.time(temp3 <- test("call_purged_ps",init,stratifiedData[[10]],sp01=0.1,sp12=1))
+
+
+
 
 
 test <- function(callName="gsl_main2ReclassifiedPS",init,stratum,sp01=0.1,sp12=1) {
