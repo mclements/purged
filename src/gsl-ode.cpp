@@ -507,13 +507,13 @@ namespace { // anonymous
       x01[k++] = 1;
       // spline parameters
       for (size_t n = 0; n<nbeta01; ++n) {
-	x01[k++]=_beta01[n];
+	x01[k++]=gsl_vector_get(_beta01,n);
       }
       // intercept
       x12[k++] = 1;
       // spline parameters
       for (size_t n = 0; n<nbeta12; ++n) {
-	x12[k++] = _beta12[n];
+	x12[k++] = gsl_vector_get(_beta12,n);
       }
       x20[k++] = 1;
       // d/dt (partial P(s,t)/partial theta) = (partial P(s,t)/partial theta)*alpha + P(s,t)(partial alpha / partial theta)
@@ -778,13 +778,13 @@ namespace { // anonymous
     x01[j++] = 1;
     // spline parameters for 0->1
     for (size_t i = 0; i < P->nbeta01; ++i) {
-      x01[j++] = basis01[i];
+      x01[j++] = gsl_vector_get(basis01,i); // unclear why the gsl_vector_get() call is needed
     }
     // intercept for 1->2
     x12[j++] = 1;
     // spline parameters for 1->2
     for (size_t i = 0; i < P->nbeta12; ++i) {
-      x12[j++] = basis12[i];
+      x12[j++] = gsl_vector_get(basis12,i);
     }
     // intercept for 2->0
     x20[j++] = 1;

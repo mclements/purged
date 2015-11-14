@@ -124,8 +124,6 @@ init <- c(-1.91166383109674, 3.84976690180782, 0.445314035540679,
 ##debug(test)
 ## system.time(temp3 <- test("call_purged_ns",init=init,stratum=stratifiedData[[10]]))
 
-test("call_purged_ns",init,stratum=stratifiedData[[10]],output_type="P_ij")
-
 ## compare finite-differences with calculated gradients
 dbeta <- function(x,i,scale,eps=1e-4) { x[i] <- x[i]+scale*eps; x }
 dtest <- function(...,beta=init,i=1,eps=1e-4)
@@ -135,10 +133,18 @@ dtest <- function(...,beta=init,i=1,eps=1e-4)
 ##        dtest("call_purged_ns",stratum=stratifiedData[[10]],i=i))
 ## test("call_purged_ns",init=init,stratum=stratifiedData[[10]],output_type="negll_gradient")
 ## FAIL: estimates are different
+test("call_purged_ns",init=init,stratum=stratifiedData[[10]],output_type="dP_ij") /
 zapsmall(sapply(1:7, function(i)
                 dtest("call_purged_ns",beta=init,stratum=stratifiedData[[10]],
                       output_type="P_ij",i=i)))
-test("call_purged_ns",init=init,stratum=stratifiedData[[10]],output_type="dP_ij")
+
+test("call_purged_ns",init=init,stratum=stratifiedData[[10]],output_type="negll_gradient")
+zapsmall(sapply(1:7, function(i)
+                dtest("call_purged_ns",beta=init,stratum=stratifiedData[[10]],
+                      output_type="negll",i=i)))
+
+
+
 
 test <- function(callName="call_purged_ps",init,stratum,sp01=0.1,sp12=1) {
     obj <- stratum[[1]]
