@@ -706,6 +706,24 @@ namespace { // anonymous
       gsl_vector_free(v12);
       return pnegll;
     }
+    Vector negll_gradient() {
+      Vector pnegll_gradient(Purged::negll_gradient());
+      gsl_vector *v01, *v12;
+      v01 = gsl_vector_alloc(beta01->size);
+      gsl_blas_dgemv(CblasNoTrans, 1.0, pmatrix01, beta01, 0.0, v01);
+      int j=1; // ignore intercept term
+      for (size_t i=0; i<nbeta01; ++i, ++j)
+	pnegll_gradient[j] = pnegll_gradient[j] + sp01*gsl_vector_get(v01,i); // add positive penalty
+      j++; // ignore next intercept term
+      v12 = gsl_vector_alloc(beta12->size);
+      gsl_blas_dgemv(CblasNoTrans, 1.0, pmatrix12, beta12, 0.0, v12);
+      for (size_t i=0; i<nbeta12; ++i, ++j)
+	pnegll_gradient[j] = pnegll_gradient[j] + sp12*gsl_vector_get(v12,i); // add positive penalty
+      // tidy up
+      gsl_vector_free(v01);
+      gsl_vector_free(v12);
+      return pnegll_gradient;
+    }
     virtual ~PurgedPS() {
       delete s01; delete s12;
       pmatrix01.free(); pmatrix12.free();
@@ -853,8 +871,12 @@ namespace { // anonymous
       return wrap(model.negll());
     if (output_type == "negll_gradient")
       return wrap(model.negll_gradient());
-    Rprintf("call_purged_ps: output_type not matched (%s)\n",output_type.c_str());
-    return wrap(model.negll());
+    if (output_type == "P_ij")
+      return wrap(model.P_ij(Never,Reclassified,0.0, 50.0));
+    if (output_type == "dP_ij")
+      return wrap(model.dP_ij(Never,Reclassified,0.0, 50.0));
+    Rprintf("call_purged_ns: output_type not matched (\"%s\").\n",output_type.c_str());
+    return wrap(model.negll()); // default
   }
 
 }
