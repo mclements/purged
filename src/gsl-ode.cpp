@@ -3,6 +3,7 @@
 //
 #include <cstdlib>
 #include <map>
+#include <algorithm>
 //
 #include <gsl/gsl_errno.h>
 #include <gsl/gsl_matrix.h>
@@ -393,7 +394,7 @@ namespace { // anonymous
       d = gsl_odeiv2_driver_alloc_y_new (&sys, gsl_odeiv2_step_rkf45,
 					 1e-10, 1e-10, 0.0);
     }
-    double P_ij(int i, int j, double s, double t) {
+    double P_ij(int i, int j, double s, double t, double eps = 1e-10) {
       // do we have the values cached?
       P_ij_key key = P_ij_key(i,j,s,t);
       if (P_ijs.count(key)>0) return P_ijs[key];
@@ -409,8 +410,8 @@ namespace { // anonymous
 	REprintf ("error, return value=%d\n", status);
       // cache the results
       for (size_t k=0; k<nstate; ++k)
-	P_ijs[P_ij_key(i,k,s,t)] = y[k];
-      return y[j];
+	P_ijs[P_ij_key(i,k,s,t)] = y[k]<eps && -eps<y[k] ? eps : y[k];
+      return P_ijs[key];
     }
     double P_iK(int i, double s, double t) {
       double total = 0.0;
@@ -419,7 +420,7 @@ namespace { // anonymous
       return total;
     }
     Vector
-    dP_ij(int i, int j, double s, double t) {
+    dP_ij(int i, int j, double s, double t, double eps = 1e-10) {
       // do we have the values cached?
       P_ij_key key = P_ij_key(i,j,s,t);
       if (dP_ijs.find(key) != dP_ijs.end()) return dP_ijs.find(key)->second;
@@ -437,7 +438,7 @@ namespace { // anonymous
       for (size_t k=0; k<nstate; ++k) { // state
 	Vector out(ncoef);
 	P_ij_key key_ik = P_ij_key(i,k,s,t);
-	P_ijs[key_ik] = y[k];
+	P_ijs[key_ik] = y[k]<eps && -eps<y[k] ? eps : y[k];
 	for (size_t m=0; m<ncoef; ++m) 
 	  out[m] = y[nstate*(m+1)+k]; // (y, P1', P2', ..., Pncoef')
 	dP_ijs.insert(dP_ij_t::value_type(key_ik, out));
@@ -453,17 +454,21 @@ namespace { // anonymous
     }
     // Excess mortality model
     double
-    mu_ij (int i, int j, double t)
+    mu_ij (int i, int j, double t, double eps = 1e-16)
     {
       if (i==Never && j==Current)  return exp(int01 + s01->calc(t, beta01));
       if (i==Current && j==Former) return exp(int12 + s12->calc(t, beta12));
       if (i==Former && j==Reclassified)  return exp(beta20);
       if (j==Death) {
 	if (i==Never) return 0.0;
-	if (i==Current) return gsl_spline_eval(spline1, bounds(t,0.5,maxage), acc1) -
-			  gsl_spline_eval(spline0, bounds(t,0.5,maxage), acc0);
-	if (i==Former) return gsl_spline_eval(spline2, bounds(t,0.5,maxage), acc2) - 
-			 gsl_spline_eval(spline0, bounds(t,0.5,maxage), acc0);
+	if (i==Current) 
+	  return std::max(eps,
+			  gsl_spline_eval(spline1, bounds(t,0.5,maxage), acc1) -
+			  gsl_spline_eval(spline0, bounds(t,0.5,maxage), acc0));
+	if (i==Former) 
+	  return std::max(eps,
+			  gsl_spline_eval(spline2, bounds(t,0.5,maxage), acc2) - 
+			  gsl_spline_eval(spline0, bounds(t,0.5,maxage), acc0));
 	if (i==Reclassified) return 0.0;
       }
       REprintf("Unexpected combinations of states in mu_ij: %i to %j.\n",i,j);
@@ -532,19 +537,29 @@ namespace { // anonymous
 	if (state == Never) // Never->Never _and_ Never->Reclassified (equiv to current status)
 	  ll = log(P_ij(Never,Never,0.0,u)+
 		   P_ij(Never,Reclassified,0.0,u)); // ignore s and t
-	if (state == Current)
+	if (state == Current) {
+	  if (debug) 
+	    Rprintf("Components: (%f,%f,%f,%f,%f)\n",P_ij(Never,Never,0.0,s),mu_ij(Never,Current,s),P_ij(Current,Current,s,u));
 	  ll = log(P_ij(Never,Never,0.0,s))+
 	    log(mu_ij(Never,Current,s))+
 	    log(P_ij(Current,Current,s,u)); // ignore t
-	if (state == Former)
+	}
+	if (state == Former) {
+	  if (debug) 
+	    Rprintf("Components: (%f,%f,%f,%f,%f)\n",P_ij(Never,Never,0.0,s),mu_ij(Never,Current,s),P_ij(Current,Current,s,t),mu_ij(Current,Former,t),P_ij(Former,Former,t,u));
 	  ll = log(P_ij(Never,Never,0.0,s))+
 	    log(mu_ij(Never,Current,s))+
 	    log(P_ij(Current,Current,s,t))+
 	    log(mu_ij(Current,Former,t))+
 	    log(P_ij(Former,Former,t,u));
+	}
       }
       if (recall == CurrentStatus) {// current status only
-	ll = log(P_ij(Never,state,0.0,u));
+	if (state == Never) // Never->Never _and_ Never->Reclassified (equiv to current status)
+	  ll = log(P_ij(Never,Never,0.0,u)+
+		   P_ij(Never,Reclassified,0.0,u)); // ignore s and t
+	else 
+	  ll = log(P_ij(Never,state,0.0,u));
       }
       if (recall == FormerWithCessation && state == Former) {// recall of age quit (not initiation) for former smokers
 	ll = log(P_ij(Never,Current,0.0,t)) + 
@@ -552,6 +567,7 @@ namespace { // anonymous
 	  log(P_ij(Former,Former,t,u)); // ignores s
       }
       if (ll == 0.0) REprintf("ll==0.0? (state=%i, recall=%i)\n",state,recall);
+      if (debug) Rprintf("(state=%i, recall=%i, s=%f,t=%f,u=%f) ll=%f\n",state,recall,s,t,u,ll);
       ll -= log(P_iK(Never,0.0,u));
       return -ll*freq;
     }
@@ -578,8 +594,14 @@ namespace { // anonymous
 	      dP_ij(Former,Former,t,u)[k]/P_ij(Former,Former,t,u);
       }
       if (recall == CurrentStatus) {// current status only
-	for (size_t k=0; k<ncoef; ++k)
-	  gradient[k] = dP_ij(Never,state,0.0,u)[k]/P_ij(Never,state,0.0,u);
+	if (state == Never) // Never->Never _and_ Never->Reclassified (equiv to current status)
+	  for (size_t k=0; k<ncoef; ++k)
+	    gradient[k] = (dP_ij(Never,Never,0.0,u)[k]+
+			   dP_ij(Never,Reclassified,0.0,u)[k]) / 
+	      (P_ij(Never,Never,0.0,u)+P_ij(Never,Reclassified,0.0,u)); // ignore s and t
+	else 
+	  for (size_t k=0; k<ncoef; ++k)
+	    gradient[k] = dP_ij(Never,state,0.0,u)[k]/P_ij(Never,state,0.0,u);
       }
       if (recall == FormerWithCessation && state == Former) {// recall of age quit (not initiation) for former smokers
 	for (size_t k=0; k<ncoef; ++k)
@@ -595,22 +617,26 @@ namespace { // anonymous
       return gradient;
     }
     Vector
-    negll_gradient() {
+    negll_gradient(bool clear_values = true) {
       // clear the stored values
-      dP_ijs.clear();
-      P_ijs.clear();
+      if (clear_values) {
+	dP_ijs.clear();
+	P_ijs.clear();
+      }
       Vector total(ncoef);
       gsl_vector_set_all(total, 0.0);
       for (size_t i = 0; i< finalState.size(); ++i) 
 	gsl_vector_add(total,negll_gradient_component(finalState[i], time1[i], time2[i], time3[i], freq[i], recall[i]));
       return total;
     }
-    double negll() {
+    double negll(bool clear_values = true) {
       // clear the stored values
-      P_ijs.clear();
+      if (clear_values) P_ijs.clear();
       double total = 0.0;
-      for (size_t i = 0; i< finalState.size(); ++i) 
+      for (size_t i = 0; i< finalState.size(); ++i) {
 	total += negll_component(finalState[i], time1[i], time2[i], time3[i], freq[i], recall[i]);
+	if (debug) Rprintf("i=%i,negll=%g\n",i,total);
+      }
       if (debug) {
 	Rprintf("Size of Pij map = %i\n",P_ijs.size());
 	Rprintf("ll(Never,0.0,0.0,70.0)=%f\n",-negll_component(Never,0.0,0.0,70.0));
@@ -632,6 +658,9 @@ namespace { // anonymous
 	Rprintf("P_iK(Never,0.0,70.0)=%f\n",P_iK(Never,0.0,70.0));
 	Rprintf("negll(Current,20,70)=%f\n",negll_component(Current, 20.0, 0.0, 70.0));
 	Rprintf("negll(Former,20,50,70)=%f\n",negll_component(Former, 20.0, 50.0, 70.0));
+	Rprintf("P_ij(Current,Current,9,71)=%f\n",P_ij(Current,Current, 9.0, 71.0));
+	Rprintf("P_ij(Current,Former,9,71)=%f\n",P_ij(Current,Former, 9.0, 71.0));
+	Rprintf("P_ij(Current,Reclassified,9,71)=%f\n",P_ij(Current,Reclassified, 9.0, 71.0));
       }
       return total;
     }
@@ -678,7 +707,7 @@ namespace { // anonymous
 		   false, // intercept
 		   true, // centred
 		   20.0, // centre
-		   as<int>(args("nterm01")) // nterm
+		   as<int>(args("nterm01")) // = nbeta01-2
 		   );
       // knots for cessation
       s12 = new ps(as<double>(args("lower12")),
@@ -686,10 +715,10 @@ namespace { // anonymous
 		   false, // intercept
 		   true, // centred
 		   40.0, // centre
-		   as<int>(args("nterm12"))
+		   as<int>(args("nterm12")) // = nbeta12-2
 		   );
     }
-    double negll() {
+    double pnegll() {
       double pnegll = Purged::negll();
       gsl_vector *v01, *v12;
       double penalty01=0.0, penalty12=0.0;
@@ -706,8 +735,8 @@ namespace { // anonymous
       gsl_vector_free(v12);
       return pnegll;
     }
-    Vector negll_gradient() {
-      Vector pnegll_gradient(Purged::negll_gradient());
+    Vector pnegll_gradient() {
+      Vector pnegll_gradient(negll_gradient());
       gsl_vector *v01, *v12;
       v01 = gsl_vector_alloc(beta01->size);
       gsl_blas_dgemv(CblasNoTrans, 1.0, pmatrix01, beta01, 0.0, v01);
@@ -756,6 +785,7 @@ namespace { // anonymous
   {
     double alpha01, alpha12, alpha20, mu0, mu1, mu2;
     Purged* P = static_cast<Purged*>(model);
+    double eps = 1e-16;
     alpha01 = exp(P->int01 + P->s01->calc(t, P->beta01));
     alpha12 = exp(P->int12 + P->s12->calc(t, P->beta12));
     alpha20 = exp(P->beta20);
@@ -763,8 +793,8 @@ namespace { // anonymous
     mu1 = gsl_spline_eval(P->spline1, bounds(t,0.5,P->maxage), P->acc1);
     mu2 = gsl_spline_eval(P->spline2, bounds(t,0.5,P->maxage), P->acc2);
     f[Never] = -(alpha01)*y[Never];
-    f[Current] = alpha01*y[Never]-(alpha12+mu1-mu0)*y[Current];
-    f[Former] = alpha12*y[Current]-(alpha20+mu2-mu0)*y[Former];
+    f[Current] = alpha01*y[Never]-(alpha12+std::max(eps,mu1-mu0))*y[Current];
+    f[Former] = alpha12*y[Current]-(alpha20+std::max(eps,mu2-mu0))*y[Former];
     f[Reclassified] = alpha20*y[Former];
     return GSL_SUCCESS;
   }
@@ -784,6 +814,7 @@ namespace { // anonymous
     Vector x01(P->ncoef), x12(P->ncoef), x20(P->ncoef);
     Vector basis01(P->nbeta01), basis12(P->nbeta12);
     int j = 0;
+    double eps = 1e-16;
     // initialise vectors to zero
     gsl_vector_set_all(x01,0.0);
     gsl_vector_set_all(x12,0.0);
@@ -815,8 +846,8 @@ namespace { // anonymous
     mu2 = P->mu_ij(Former,Death,t);
     // base equations
     f[Never] = -alpha01*y[Never];
-    f[Current] = alpha01*y[Never]-(alpha12+mu1-mu0)*y[Current];
-    f[Former] = alpha12*y[Current]-(alpha20+mu2-mu0)*y[Former];
+    f[Current] = alpha01*y[Never]-(alpha12+std::max(eps,mu1-mu0))*y[Current];
+    f[Former] = alpha12*y[Current]-(alpha20+std::max(eps,mu2-mu0))*y[Former];
     f[Reclassified] = alpha20*y[Former];
     // d/dt (partial P(s,t)/partial theta) = (partial P(s,t)/partial theta)*alpha + P(s,t)(partial alpha / partial theta)
     for (int offset=P->nstate, i=0; i < (int) P->ncoef; ++i, offset += P->nstate) {
@@ -825,9 +856,9 @@ namespace { // anonymous
       dalpha20 = alpha20 * x20[i];
       f[Never+offset] = - (alpha01*y[Never+offset] + dalpha01*y[Never]);
       f[Current+offset] = alpha01*y[Never+offset] + dalpha01*y[Never] -
-	((alpha12+mu1-mu0)*y[Current+offset] + dalpha12*y[Current]);
+	((alpha12+std::max(eps,mu1-mu0))*y[Current+offset] + dalpha12*y[Current]);
       f[Former+offset] = alpha12*y[Current+offset]+dalpha12*y[Current] -
-	((alpha20+mu2-mu0)*y[Former+offset] + dalpha20*y[Former]);
+	((alpha20+std::max(eps,mu2-mu0))*y[Former+offset] + dalpha20*y[Former]);
       f[Reclassified+offset] = alpha20*y[Former+offset] + dalpha20*y[Former];
     }
     // tidy up - is this strictly needed?
@@ -871,6 +902,10 @@ namespace { // anonymous
       return wrap(model.negll());
     if (output_type == "negll_gradient")
       return wrap(model.negll_gradient());
+    if (output_type == "pnegll")
+      return wrap(model.pnegll());
+    if (output_type == "pnegll_gradient")
+      return wrap(model.pnegll_gradient());
     if (output_type == "P_ij")
       return wrap(model.P_ij(Never,Reclassified,0.0, 50.0));
     if (output_type == "dP_ij")

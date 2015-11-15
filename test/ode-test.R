@@ -59,7 +59,6 @@ if (doOnce <- FALSE) {
     }
     save(smokingList,mortList,subset.lookupList,file="~/Documents/clients/ted/smokingList-20140528.RData")
 }
-## p-splines estimation
 require(parallel)
 require(purged)
 require(survival)
@@ -72,57 +71,74 @@ stratifiedData <- lapply(1:nrow(strata), function(i) {
     smokingList[strata$sex[i]==smokingSex &
                 smokingCohort>=strata$from[i] & smokingCohort<=strata$to[i]]
 })
+## simplify the data: combine the 5 single-year cohorts
+stratifiedData2 <- lapply(stratifiedData, function(obj)
+                 list(sex=obj[[1]]$sex, cohort=obj[[3]]$cohort, mort=obj[[3]]$mort,
+                      smoking=do.call("rbind", lapply(obj, function(elt) elt$smoking))))
 
-test <- function(callName="call_purged_ps",init,stratum,sp01=0.1,sp12=1,output_type="negll") {
-    obj <- stratum[[1]]
+## testing and optimisation for ps
+test <- function(callName="call_purged_ps",init,stratum,sp01=0.1,sp12=1,output_type="negll",debug=FALSE) {
     nterm01 <- nterm12 <- 5
-    P <- function(beta) {
-        int01 <- beta[i <- 1]
-        beta01 <- beta[(i+1):(i <- i+nterm01+2)]
-        int12 <- beta[i <- i+1]
-        beta12 <- beta[(i+1):(i <- i+nterm12+2)]
-        beta20 <- beta[i <- i+1]
-        ## do.call("sum",
-        ##         mclapply(stratum, function(obj) {
-                    smoking <- obj$smoking[1:5,]
-                    mort <- obj$mort
-                    .Call(callName,
-                          list(finalState=as.integer(smoking$smkstat - 1), 
-                               recall=as.integer(smoking$recall),
-                               time1=smoking$agestart,
-                               time2=smoking$agequit,
-                               time3=smoking$age, # age observed
-                               freq=smoking$freq, # frequency (as double)
-                               int01=int01,
-                               int12=int12,
-                               lower01=10,
-                               upper01=40,
-                               nterm01=as.integer(nterm01),
-                               pmatrix01=attr(pspline(c(10,40),nterm=nterm01),"pparm"),
-                               sp01=sp01,
-                               lower12=10,
-                               upper12=70,
-                               nterm12=as.integer(nterm12),
-                               pmatrix12=attr(pspline(c(10,70),nterm=nterm12),"pparm"),
-                               sp12=sp12,
-                               beta01=beta01,
-                               beta12=beta12,
-                               beta20=beta20,
-                               ages0=mort$age,
-                               mu0=mort$Never,
-                               mu1=mort$Current,
-                               mu2=mort$Former,
-                               N=nrow(smoking),
-                               nages0=length(mort$age),
-                               nbeta01=length(beta01),
-                               nbeta12=length(beta12),
-                               output_type=output_type,
-                               debug=FALSE), # debug
-                          package="purged")
-                ## }, mc.cores=2))
+    smoking <- stratum$smoking
+    mort <- stratum$mort
+    args <- list(finalState=as.integer(smoking$smkstat - 1), 
+                 recall=as.integer(smoking$recall),
+                 time1=smoking$agestart,
+                 time2=smoking$agequit,
+                 time3=smoking$age, # age observed
+                 freq=smoking$freq, # frequency (as double)
+                 lower01=10,
+                 upper01=40,
+                 nterm01=as.integer(nterm01),
+                 pmatrix01=attr(pspline(c(10,40),nterm=nterm01),"pparm"),
+                 sp01=sp01,
+                 lower12=10,
+                 upper12=70,
+                 nterm12=as.integer(nterm12),
+                 pmatrix12=attr(pspline(c(10,70),nterm=nterm12),"pparm"),
+                 sp12=sp12,
+                 ages0=mort$age,
+                 mu0=mort$Never,
+                 mu1=mort$Current,
+                 mu2=mort$Former,
+                 N=nrow(smoking),
+                 nages0=length(mort$age),
+                 nbeta01=as.integer(nterm01+2),
+                 nbeta12=as.integer(nterm12+2),
+                 output_type=output_type,
+                 debug=debug)
+    parseBeta <- function(beta) {
+        args$int01 <- beta[i <- 1]
+        args$beta01 <- beta[(i+1):(i <- i+nterm01+2)]
+        args$int12 <- beta[i <- i+1]
+        args$beta12 <- beta[(i+1):(i <- i+nterm12+2)]
+        args$beta20 <- beta[i <- i+1]
+        args
     }
-    ## return(pnegll(init))
-    return(P(init))
+    objective <- function(beta) {
+        args <- parseBeta(beta)
+        args$output_type="pnegll"
+        value <- .Call(callName, args, package="purged")
+        cat(value); cat("\n")
+        value
+    }
+    gradient <- function(beta) {
+        args <- parseBeta(beta)
+        args$output_type="pnegll_gradient"
+        .Call(callName, args, package="purged")
+    }
+    fun <- function(beta) {
+        args <- parseBeta(beta)
+        args$output_type <- output_type
+        .Call(callName, args, package="purged")
+    }
+    if (output_type == "optim") {
+        fit <- nlminb(init,objective,gradient)
+        fit$hessian <- optimHess(fit$par,objective,gradient)
+        fit$vcov <- solve(fit$hessian)
+        return(fit)
+    }
+    return(fun(init))
 }
 init <- c(-3,
           rep(0.1,5+2),
@@ -134,22 +150,159 @@ init <- c(-2.2084,
           -5.2397,
           -0.9299, -1.105, -0.6869, 0.1301, 1.1833, 2.0894, 
           -4.3141)
+test("call_purged_ps",init,sp01=0.1,sp12=1,stratum=stratifiedData2[[10]],output_type="negll",debug=FALSE) 
+test("call_purged_ps",init,sp01=0.1,sp12=1,stratum=stratifiedData2[[10]],output_type="pnegll",debug=FALSE) 
+## temp <- stratifiedData[[10]][[1]]
+## temp$smoking[1+c(1253:1259),]
 ##debug(test)
-test("call_purged_ps",init,stratifiedData[[10]],sp01=0.1,sp12=1,output_type="negll_gradient")
-
 dbeta <- function(x,i,scale,eps=1e-4) { x[i] <- x[i]+scale*eps; x }
 dtest <- function(...,beta=init,i=1,eps=1e-4)
     (test(...,init=dbeta(beta,i,scale=1,eps=eps)) -
      test(...,init=dbeta(beta,i,scale=-1,eps=eps))) / (2*eps)
-test("call_purged_ps",init,sp01=0.1,sp12=1,stratum=stratifiedData[[10]],output_type="negll_gradient") /
+test("call_purged_ps",init,sp01=0.1,sp12=1,stratum=stratifiedData2[[10]],output_type="pnegll_gradient")
 zapsmall(sapply(1:length(init), function(i)
-                dtest("call_purged_ps",beta=init,stratum=stratifiedData[[10]],
-                      output_type="negll",i=i)))
+                dtest("call_purged_ps",beta=init,stratum=stratifiedData2[[10]],sp01=0.1,sp12=1,
+                      output_type="pnegll",i=i, eps=1e-6)))
+
+test("call_purged_ps",init,sp01=0.1,sp12=1,stratum=stratifiedData2[[10]],output_type="negll_gradient")
+zapsmall(sapply(1:length(init), function(i)
+                dtest("call_purged_ps",beta=init,stratum=stratifiedData2[[10]],sp01=0.1,sp12=1,
+                      output_type="negll",i=i, eps=1e-6)))
+
+system.time(fit <- test("call_purged_ps",init,sp01=0.1,sp12=1,stratum=stratifiedData2[[10]],
+                        output_type="optim",debug=FALSE))
 
 
-## test ns
+## optimize ns
+require(bbmle)
+optimObjective <- function(obj,init,debug=FALSE) {
+    smoking <- obj$smoking
+    mort <- obj$mort
+    args <- list(finalState=as.integer(smoking$smkstat - 1), 
+                 recall=as.integer(smoking$recall),
+                 time1=smoking$agestart,
+                 time2=smoking$agequit,
+                 time3=smoking$age, # age observed
+                 freq=smoking$freq, # frequency (as double)
+                 ages0=mort$age,
+                 mu0=mort$Never,
+                 mu1=mort$Current,
+                 mu2=mort$Former,
+                 N=nrow(smoking),
+                 knots01=c(10,20,30),
+                 knots12=c(20,40,60),
+                 nages0=length(mort$age),
+                 nbeta01=2L,
+                 nbeta12=2L,
+                 debug=FALSE)
+    parseBeta <- function(beta) {
+        args$int01 <- beta[i <- 1]
+        args$beta01 <- beta[(i+1):(i <- i+2)]
+        args$int12 <- beta[i <- i+1]
+        args$beta12 <- beta[(i+1):(i <- i+2)]
+        args$beta20 <- beta[i <- i+1]
+        args
+    }
+    objective <- function(beta) {
+        args <- parseBeta(beta)
+        args$output_type <- "negll"
+        value <- .Call("call_purged_ns",args,package="purged")
+        if (debug) cat(sprintf("value=%f\n",value))
+        value
+    }
+    gradient <- function(beta) {
+        args <- parseBeta(beta)
+        args$output_type <- "negll_gradient"
+        value <- .Call("call_purged_ns",args,package="purged")
+        if (debug) { cat("gradient="); cat(value); cat("\n") }
+        value
+    }
+    ##optim(init,objective,control=list(trace=2)) # slow
+    ## optim(init,objective,gradient,method="BFGS") # FAILS
+    fit <- nlminb(init,objective,gradient)
+    fit$hessian <- optimHess(fit$par,objective,gradient)
+    fit$vcov <- solve(fit$hessian)
+    fit
+}
+init <- c(-1.91166383109674,
+          3.84976690180782, 0.445314035540679, 
+          -4.86139268487933,
+          -0.344483039469035, 0.979805469221358,
+          -3.53232595501467)
+system.time(optim1 <- optimObjective(stratifiedData2[[1]], init*1.1))
+
+## simple testing for ns
 test <- function(callName="call_purged_ns",init,stratum,output_type="negll",debug=FALSE) {
-    obj <- stratum[[1]]
+    obj <- stratum #[[1]]
+    nterm01 <- 2
+    nterm12 <- 2
+    P <- function(beta) {
+        int01 <- beta[i <- 1]
+        beta01 <- beta[(i+1):(i <- i+nterm01)]
+        int12 <- beta[i <- i+1]
+        beta12 <- beta[(i+1):(i <- i+nterm12)]
+        beta20 <- beta[i <- i+1]
+        smoking <- obj$smoking[1:5,]
+        mort <- obj$mort
+        args <- list(finalState=as.integer(smoking$smkstat - 1), 
+                     recall=as.integer(smoking$recall),
+                     time1=smoking$agestart,
+                     time2=smoking$agequit,
+                     time3=smoking$age, # age observed
+                     freq=smoking$freq, # frequency (as double)
+                     int01=int01,
+                     int12=int12,
+                     beta01=beta01,
+                     beta12=beta12,
+                     beta20=beta20,
+                     ages0=mort$age,
+                     mu0=mort$Never,
+                     mu1=mort$Current,
+                     mu2=mort$Former,
+                     N=nrow(smoking),
+                     knots01=c(10,20,30),
+                     knots12=c(20,40,60),
+                     nages0=length(mort$age),
+                     nbeta01=length(beta01),
+                     nbeta12=length(beta12),
+                     output_type=output_type,
+                     debug=debug)
+        .Call(callName,
+              , 
+              package="purged")
+        ## }, mc.cores=2))
+    }
+    ## return(pnegll(init))
+    return(P(init))
+}
+init <- c(-1.91166383109674, 3.84976690180782, 0.445314035540679,
+          -4.86139268487933, -0.344483039469035, 0.979805469221358,
+          -3.53232595501467)
+##debug(test)
+test("call_purged_ns",init=init,stratum=stratifiedData2[[10]])
+##
+## compare finite-differences with calculated gradients
+dbeta <- function(x,i,scale,eps=1e-4) { x[i] <- x[i]+scale*eps; x }
+dtest <- function(...,beta=init,i=1,eps=1e-4)
+    (test(...,init=dbeta(beta,i,scale=1,eps=eps)) -
+     test(...,init=dbeta(beta,i,scale=-1,eps=eps))) / (2*eps)
+## sapply(1:7, function(i)
+##        dtest("call_purged_ns",stratum=stratifiedData[[10]],i=i))
+## test("call_purged_ns",init=init,stratum=stratifiedData[[10]],output_type="negll_gradient")
+## FAIL: estimates are different
+test("call_purged_ns",init=init,stratum=stratifiedData[[10]],output_type="dP_ij") /
+    zapsmall(sapply(1:7, function(i)
+                    dtest("call_purged_ns",beta=init,stratum=stratifiedData[[10]],
+                          output_type="P_ij",i=i)))
+test("call_purged_ns",init=init,stratum=stratifiedData[[10]],output_type="negll_gradient") /
+    zapsmall(sapply(1:7, function(i)
+                    dtest("call_purged_ns",beta=init,stratum=stratifiedData[[10]],
+                          output_type="negll",i=i)))
+
+
+## simple testing for ns
+test <- function(callName="call_purged_ns",init,stratum,output_type="negll",debug=FALSE) {
+    obj <- stratum #[[1]]
     nterm01 <- 2
     nterm12 <- 2
     P <- function(beta) {
@@ -197,30 +350,140 @@ init <- c(-1.91166383109674, 3.84976690180782, 0.445314035540679,
           -3.53232595501467)
 ##debug(test)
 ## system.time(temp3 <- test("call_purged_ns",init=init,stratum=stratifiedData[[10]]))
-
 ## compare finite-differences with calculated gradients
 dbeta <- function(x,i,scale,eps=1e-4) { x[i] <- x[i]+scale*eps; x }
 dtest <- function(...,beta=init,i=1,eps=1e-4)
     (test(...,init=dbeta(beta,i,scale=1,eps=eps)) -
      test(...,init=dbeta(beta,i,scale=-1,eps=eps))) / (2*eps)
 ## sapply(1:7, function(i)
-##        dtest("call_purged_ns",stratum=stratifiedData[[10]],i=i))
-## test("call_purged_ns",init=init,stratum=stratifiedData[[10]],output_type="negll_gradient")
+##        dtest("call_purged_ns",stratum=stratifiedData2[[10]],i=i))
+## test("call_purged_ns",init=init,stratum=stratifiedData2[[10]],output_type="negll_gradient")
 ## FAIL: estimates are different
-test("call_purged_ns",init=init,stratum=stratifiedData[[10]],output_type="dP_ij") /
+## test("call_purged_ns",init=init,stratum=stratifiedData2[[10]],output_type="dP_ij") /
+## zapsmall(sapply(1:7, function(i)
+##                 dtest("call_purged_ns",beta=init,stratum=stratifiedData2[[10]],
+##                       output_type="P_ij",i=i)))
+##
+test("call_purged_ns",init=init,stratum=stratifiedData2[[10]],output_type="negll")
+test("call_purged_ns",init=init,stratum=stratifiedData2[[10]],output_type="negll_gradient")
 zapsmall(sapply(1:7, function(i)
-                dtest("call_purged_ns",beta=init,stratum=stratifiedData[[10]],
-                      output_type="P_ij",i=i)))
-
-test("call_purged_ns",init=init,stratum=stratifiedData[[10]],output_type="negll_gradient")
-zapsmall(sapply(1:7, function(i)
-                dtest("call_purged_ns",beta=init,stratum=stratifiedData[[10]],
+                dtest("call_purged_ns",beta=init,stratum=stratifiedData2[[10]],
                       output_type="negll",i=i)))
 
 
+##system.time(out <- mclapply(1:42, function(i) {cat("Object",i,"\n"); try(optimObjective(stratifiedData[[i]], inits[[i]]))}, mc.cores=2))
+##save(out,file="~/src/R/purged/test/out-20150502-full.RData")
 
 
-
+optimObjective <- function(stratum,sp01=0.1,sp12=1,hessian=FALSE) {
+    nterm01 <- nterm12 <- 5
+    args <- 
+    pnegll <- function(beta) {
+        int01 <- beta[i <- 1]
+        int12 <- beta[i <- i+1]
+        beta01 <- beta[(i+1):(i <- i+nterm01+2)]
+        beta12 <- beta[(i+1):(i <- i+nterm12+2)]
+        beta20 <- beta[i <- i+1]
+        ## print(beta,digits=3)
+        do.call("sum",
+                mclapply(stratum, function(obj) {
+                    smoking <- obj$smoking
+                    mort <- obj$mort
+                    .Call("gsl_main2ReclassifiedPS",
+                          smoking$smkstat - 1, 
+                          as.integer(smoking$recall),
+                          smoking$agestart,
+                          smoking$agequit,
+                          smoking$age, # age observed
+                          smoking$freq, # frequency (as double)
+                          int01,
+                          int12,
+                          10, 40, nterm01, attr(pspline(c(10,40),nterm=nterm01),"pparm"), sp01,
+                          10, 70, nterm12, attr(pspline(c(10,70),nterm=nterm12),"pparm"), sp12,
+                          beta01,
+                          beta12,
+                          beta20,
+                          mort$age,
+                          mort$Never,
+                          mort$Current,
+                          mort$Former,
+                          FALSE, # debug
+                          package="purged")$pnegll
+                }, mc.cores=2))
+    }
+    negll <- function(beta) {
+        int01 <- beta[i <- 1]
+        int12 <- beta[i <- i+1]
+        beta01 <- beta[(i+1):(i <- i+nterm01+2)]
+        beta12 <- beta[(i+1):(i <- i+nterm12+2)]
+        beta20 <- beta[i <- i+1]
+        do.call("sum",
+                mclapply(stratum, function(obj) {
+                    smoking <- obj$smoking
+                    mort <- obj$mort
+                    .Call("gsl_main2ReclassifiedPS",
+                          smoking$smkstat - 1, 
+                          as.integer(smoking$recall),
+                          smoking$agestart,
+                          smoking$agequit,
+                          smoking$age, # age observed
+                          smoking$freq, # frequency (as double)
+                          int01,
+                          int12,
+                          10, 40, nterm01, attr(pspline(c(10,40),nterm=nterm01),"pparm"), sp01,
+                          10, 70, nterm12, attr(pspline(c(10,70),nterm=nterm12),"pparm"), sp12,
+                          beta01,
+                          beta12,
+                          beta20,
+                          mort$age,
+                          mort$Never,
+                          mort$Current,
+                          mort$Former,
+                          FALSE, # debug
+                          package="purged")$negll
+                }, mc.cores=2))
+    }
+    ## return(pnegll(init))
+    out <- nlminb(init,pnegll,control=list(trace=1,rel.tol=1e-7))
+    out$negll <- negll # function 
+    out$pnegll <- pnegll # function
+    out$coefficients <- out$par
+    if (hessian) {
+        out$hessian <- optimHess(coef(out), pnegll)
+        ## Hl <- numDeriv::hessian(llike,coef)
+        Hl <- optimHess(coef(out), negll)
+        Hinv <- solve(out$hessian)
+        out$trace <- sum(diag(Hinv %*% Hl))
+    }
+    return(out)
+}
+init <- c(-3,
+          -4,
+          rep(0.1,5+2),
+          rep(0.1,5+2),
+          log(0.01))
+## init <- c(-2.2084, -5.2397, 1.7865, 3.9082, 4.2282, 2.6938, 1.7596, 2.0776, 
+##           0.8403, -0.5627, -0.9299, -1.105, -0.6869, 0.1301, 1.1833, 2.0894, 
+##           -4.3141)
+init <- c(-2.2403,
+          -5.2734,
+          1.7934, 3.9026, 4.1966, 2.6475, 1.7147, 2.032, 0.7888,
+          -0.1281, -0.2629, -0.4078, 0.0032, 0.8361, 1.9041, 2.8168, 
+          -4.4402)
+system.time(fit1890.1 <- optimObjective(stratifiedData[[1]],sp01=0.1,sp12=1,hessian=TRUE))
+str(fit1890.1)
+with(fit1890.1, pnegll(par))
+with(fit1890.1, dput(round(par,4)))
+diag(solve(fit1890.1$hessian))
+##
+## coef.nlminb <- coef(fit1890.1)
+coef.nlminb <- c(-2.30426533639024, -5.59189828926138, 1.7591741291095, 3.94699944347449, 
+4.05923551226308, 2.39407490385323, 1.39327811089255, 1.92043040616437, 
+1.37925846582657, 0.705860430956955, 0.138782801435078, -0.970265049666329, 
+0.0159183612281592, 0.0379401144182051, 0.100106028532845, 0.263734898066751, 
+0.388138157647989, 0.201325379289236, -0.059788133365412, -0.13877113685924, 
+-0.0194342640363815, 0.44876575129484, -4.71103159635782)
+with(fit1890.1, pnegll(coef.nlminb))
 
 
 
