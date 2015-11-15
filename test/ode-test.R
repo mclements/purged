@@ -76,6 +76,72 @@ stratifiedData2 <- lapply(stratifiedData, function(obj)
                  list(sex=obj[[1]]$sex, cohort=obj[[3]]$cohort, mort=obj[[3]]$mort,
                       smoking=do.call("rbind", lapply(obj, function(elt) elt$smoking))))
 
+## simple testing for ns
+test <- function(callName="call_purged_ns",init,stratum,output_type="negll",debug=FALSE) {
+    obj <- stratum #[[1]]
+    nterm01 <- 2
+    nterm12 <- 2
+    P <- function(beta) {
+        int01 <- beta[i <- 1]
+        beta01 <- beta[(i+1):(i <- i+nterm01)]
+        int12 <- beta[i <- i+1]
+        beta12 <- beta[(i+1):(i <- i+nterm12)]
+        beta20 <- beta[i <- i+1]
+        smoking <- obj$smoking[1:5,]
+        mort <- obj$mort
+        args <- list(finalState=as.integer(smoking$smkstat - 1), 
+                     recall=as.integer(smoking$recall),
+                     time1=smoking$agestart,
+                     time2=smoking$agequit,
+                     time3=smoking$age, # age observed
+                     freq=smoking$freq, # frequency (as double)
+                     int01=int01,
+                     int12=int12,
+                     beta01=beta01,
+                     beta12=beta12,
+                     beta20=beta20,
+                     ages0=mort$age,
+                     mu0=mort$Never,
+                     mu1=mort$Current,
+                     mu2=mort$Former,
+                     N=nrow(smoking),
+                     knots01=c(10,20,30),
+                     knots12=c(20,40,60),
+                     nages0=length(mort$age),
+                     nbeta01=length(beta01),
+                     nbeta12=length(beta12),
+                     output_type=output_type,
+                     debug=debug)
+        .Call(callName, args, package="purged")
+    }
+    return(P(init))
+}
+init <- c(-1.91166383109674, 3.84976690180782, 0.445314035540679,
+          -4.86139268487933, -0.344483039469035, 0.979805469221358,
+          -3.53232595501467)
+##debug(test)
+test("call_purged_ns",init=init,stratum=stratifiedData2[[10]], output_type="negll_gradient")
+
+##
+## compare finite-differences with calculated gradients
+dbeta <- function(x,i,scale,eps=1e-4) { x[i] <- x[i]+scale*eps; x }
+dtest <- function(...,beta=init,i=1,eps=1e-4)
+    (test(...,init=dbeta(beta,i,scale=1,eps=eps)) -
+     test(...,init=dbeta(beta,i,scale=-1,eps=eps))) / (2*eps)
+## sapply(1:7, function(i)
+##        dtest("call_purged_ns",stratum=stratifiedData[[10]],i=i))
+## test("call_purged_ns",init=init,stratum=stratifiedData[[10]],output_type="negll_gradient")
+## FAIL: estimates are different
+test("call_purged_ns",init=init,stratum=stratifiedData[[10]],output_type="dP_ij") /
+    zapsmall(sapply(1:7, function(i)
+                    dtest("call_purged_ns",beta=init,stratum=stratifiedData[[10]],
+                          output_type="P_ij",i=i)))
+test("call_purged_ns",init=init,stratum=stratifiedData[[10]],output_type="negll_gradient") /
+    zapsmall(sapply(1:7, function(i)
+                    dtest("call_purged_ns",beta=init,stratum=stratifiedData[[10]],
+                          output_type="negll",i=i)))
+
+
 ## testing and optimisation for ps
 test <- function(callName="call_purged_ps",init,stratum,sp01=0.1,sp12=1,output_type="negll",debug=FALSE) {
     nterm01 <- nterm12 <- 5
@@ -163,12 +229,10 @@ test("call_purged_ps",init,sp01=0.1,sp12=1,stratum=stratifiedData2[[10]],output_
 zapsmall(sapply(1:length(init), function(i)
                 dtest("call_purged_ps",beta=init,stratum=stratifiedData2[[10]],sp01=0.1,sp12=1,
                       output_type="pnegll",i=i, eps=1e-6)))
-
 test("call_purged_ps",init,sp01=0.1,sp12=1,stratum=stratifiedData2[[10]],output_type="negll_gradient")
 zapsmall(sapply(1:length(init), function(i)
                 dtest("call_purged_ps",beta=init,stratum=stratifiedData2[[10]],sp01=0.1,sp12=1,
                       output_type="negll",i=i, eps=1e-6)))
-
 system.time(fit <- test("call_purged_ps",init,sp01=0.1,sp12=1,stratum=stratifiedData2[[10]],
                         output_type="optim",debug=FALSE))
 
@@ -267,12 +331,8 @@ test <- function(callName="call_purged_ns",init,stratum,output_type="negll",debu
                      nbeta12=length(beta12),
                      output_type=output_type,
                      debug=debug)
-        .Call(callName,
-              , 
-              package="purged")
-        ## }, mc.cores=2))
+        .Call(callName, args, package="purged")
     }
-    ## return(pnegll(init))
     return(P(init))
 }
 init <- c(-1.91166383109674, 3.84976690180782, 0.445314035540679,

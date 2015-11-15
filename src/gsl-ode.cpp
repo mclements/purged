@@ -318,7 +318,7 @@ namespace { // anonymous
     splineBasis *s01;
     splineBasis *s12;
     std::map<P_ij_key,double> P_ijs;
-    std::map<P_ij_key,Vector> dP_ijs;
+    std::map<P_ij_key,Vector> dP_ijs; // map of pointers: care required
     gsl_odeiv2_system sys;
     gsl_odeiv2_driver *d;
     // data fields
@@ -360,10 +360,14 @@ namespace { // anonymous
 	Rprintf("maxage=%f\n",maxage);
       sys.jacobian = 0; 
       sys.params = (void *) this;
-      default_sys();
+      sys.function = funcReclassified;
+      sys.dimension = nstate;
+      d = gsl_odeiv2_driver_alloc_y_new (&sys, gsl_odeiv2_step_rkf45,
+					 1e-10, 1e-10, 0.0);
     }
     virtual ~Purged() {
       finalState.free();
+      freq.free();
       recall.free();
       time1.free();
       time2.free();
@@ -381,16 +385,25 @@ namespace { // anonymous
       gsl_interp_accel_free (acc1);
       gsl_interp_accel_free (acc2);
       gsl_odeiv2_driver_free (d);
+      P_ijs.clear();
+      dP_ijs_clear();
+    }
+    void dP_ijs_clear() {
+      for (dP_ij_t::iterator it = dP_ijs.begin(); it != dP_ijs.end(); it++)
+	it->second.free();
+      dP_ijs.clear();
     }
     void default_sys() {
       sys.function = funcReclassified;
       sys.dimension = nstate;
+      gsl_odeiv2_driver_free (d);
       d = gsl_odeiv2_driver_alloc_y_new (&sys, gsl_odeiv2_step_rkf45,
 					 1e-10, 1e-10, 0.0);
     }
     void extended_sys() {
       sys.function = funcReclassifiedExtended;
       sys.dimension = nstate*(ncoef+1);
+      gsl_odeiv2_driver_free (d);
       d = gsl_odeiv2_driver_alloc_y_new (&sys, gsl_odeiv2_step_rkf45,
 					 1e-10, 1e-10, 0.0);
     }
@@ -446,7 +459,8 @@ namespace { // anonymous
       return dP_ijs.find(key)->second;
     }
     Vector dP_iK(int i, double s, double t) {
-      Vector total(ncoef);
+      Vector total(ncoef); // freed in negll_gradient_component()
+      gsl_vector_set_all(total,0.0);
       for (size_t k=0; k<nstate; ++k) {
 	gsl_vector_add(total,dP_ij(i,k,s,t));
       }
@@ -580,18 +594,24 @@ namespace { // anonymous
 	    gradient[k] = (dP_ij(Never,Never,0.0,u)[k]+
 			   dP_ij(Never,Reclassified,0.0,u)[k]) / 
 	      (P_ij(Never,Never,0.0,u)+P_ij(Never,Reclassified,0.0,u)); // ignore s and t
-	if (state == Current)
-	  for (size_t k=0; k<ncoef; ++k)
+	if (state == Current) {
+	  Vector rmu01(rmu_ij(Never,Current,s));
+	  for (size_t k=0; k<ncoef; ++k) 
 	    gradient[k] = dP_ij(Never,Never,0.0,s)[k] / P_ij(Never,Never,0.0,s)+
-	      rmu_ij(Never,Current,s)[k]+
+	      rmu01[k]+
 	      dP_ij(Current,Current,s,u)[k]/P_ij(Current,Current,s,u); // ignore t
-	if (state == Former)
+	  rmu01.free();
+	  }
+	if (state == Former) {
+	  Vector rmu01(rmu_ij(Never,Current,s)), rmu12(rmu_ij(Current,Former,t));
 	  for (size_t k=0; k<ncoef; ++k)
 	    gradient[k] = dP_ij(Never,Never,0.0,s)[k]/P_ij(Never,Never,0.0,s)+
 	      rmu_ij(Never,Current,s)[k]+
 	      dP_ij(Current,Current,s,t)[k]/P_ij(Current,Current,s,t)+
-	      rmu_ij(Current,Former,t)[k]+
+	      rmu12[k]+
 	      dP_ij(Former,Former,t,u)[k]/P_ij(Former,Former,t,u);
+	  rmu01.free(); rmu12.free();
+	}
       }
       if (recall == CurrentStatus) {// current status only
 	if (state == Never) // Never->Never _and_ Never->Reclassified (equiv to current status)
@@ -604,14 +624,19 @@ namespace { // anonymous
 	    gradient[k] = dP_ij(Never,state,0.0,u)[k]/P_ij(Never,state,0.0,u);
       }
       if (recall == FormerWithCessation && state == Former) {// recall of age quit (not initiation) for former smokers
+	Vector rmu12(rmu_ij(Current,Former,t));
 	for (size_t k=0; k<ncoef; ++k)
 	  gradient[k] = dP_ij(Never,Current,0.0,t)[k]/P_ij(Never,Current,0.0,t) + 
-	    rmu_ij(Current,Former,t)[k]+
+	    rmu12[k]+
 	    dP_ij(Former,Former,t,u)[k]/P_ij(Former,Former,t,u); // ignores s
+	rmu12.free();
       }
       // if (ll == 0.0) REprintf("ll==0.0? (state=%i, recall=%i)\n",state,recall);
-      for (size_t k=0; k<ncoef; ++k)
-	gradient[k] = gradient[k] - dP_iK(Never,0.0,u)[k] / P_iK(Never,0.0,u);
+      Vector dP(dP_iK(Never,0.0,u));
+      for (size_t k=0; k<ncoef; ++k) {
+	gradient[k] = gradient[k] - dP[k] / P_iK(Never,0.0,u);
+      }
+      dP.free();
       for (size_t k=0; k<ncoef; ++k)
 	gradient[k] = -gradient[k]*freq;
       return gradient;
@@ -620,17 +645,19 @@ namespace { // anonymous
     negll_gradient(bool clear_values = true) {
       // clear the stored values
       if (clear_values) {
-	dP_ijs.clear();
 	P_ijs.clear();
+	dP_ijs_clear();
       }
       Vector total(ncoef);
       gsl_vector_set_all(total, 0.0);
-      for (size_t i = 0; i< finalState.size(); ++i) 
-	gsl_vector_add(total,negll_gradient_component(finalState[i], time1[i], time2[i], time3[i], freq[i], recall[i]));
+      for (size_t i = 0; i< finalState.size(); ++i) {
+	Vector component(negll_gradient_component(finalState[i], time1[i], time2[i], time3[i], freq[i], recall[i]));
+	gsl_vector_add(total,component);
+	component.free();
+      }
       return total;
     }
     double negll(bool clear_values = true) {
-      // clear the stored values
       if (clear_values) P_ijs.clear();
       double total = 0.0;
       for (size_t i = 0; i< finalState.size(); ++i) {
@@ -910,7 +937,7 @@ namespace { // anonymous
       return wrap(model.P_ij(Never,Reclassified,0.0, 50.0));
     if (output_type == "dP_ij")
       return wrap(model.dP_ij(Never,Reclassified,0.0, 50.0));
-    Rprintf("call_purged_ns: output_type not matched (\"%s\").\n",output_type.c_str());
+    Rprintf("call_purged_ps: output_type not matched (\"%s\").\n",output_type.c_str());
     return wrap(model.negll()); // default
   }
 
