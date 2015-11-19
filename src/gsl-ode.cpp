@@ -24,8 +24,7 @@ namespace { // anonymous
 
   // declare types
   typedef boost::tuple<int,int,double,double> P_ij_key;
-  typedef RcppGSL::vector<double> Vector;
-  typedef std::map<P_ij_key,Vector> dP_ij_t;
+  typedef std::map<P_ij_key,gsl_vector*> dP_ij_t;
   //forward declaration(s)
   int funcReclassified (double t, const double y[], double f[],
 			void *model);
@@ -331,7 +330,7 @@ namespace { // anonymous
       RcppGSL::vector<int>
 	_finalState(as<RcppGSL::vector<int> >(args("finalState"))),
 	_recall(as<RcppGSL::vector<int> >(args("recall")));
-      Vector 
+      RcppGSL::Vector 
 	_time1(as<Vector>(args("time1"))),
 	_time2(as<Vector>(args("time2"))),
 	_time3(as<Vector>(args("time3"))),
@@ -752,14 +751,21 @@ namespace { // anonymous
 
   class PurgedPS : public Purged {
   public:
-    RcppGSL::matrix<double> pmatrix01, pmatrix12;
+    gsl_matrix *pmatrix01, *pmatrix12;
     double sp01, sp12;
     PurgedPS(SEXP sexp, int N, int nbeta01, int nbeta12, int nages0) : 
-      Purged(sexp, N, nbeta01, nbeta12, nages0), 
-      pmatrix01(nbeta01,nbeta01), pmatrix12(nbeta12, nbeta12) {
+      Purged(sexp, N, nbeta01, nbeta12, nages0) {
       List args = as<List>(sexp);
-      pmatrix01 = args("pmatrix01");
-      pmatrix12 = args("pmatrix12");
+      RcppGSL::Matrix _pmatrix01(as<RcppGSL::Matrix>(args("pmatrix01")));
+      RcppGSL::Matrix _pmatrix12(as<RcppGSL::Matrix>(args("pmatrix12")));
+      pmatrix01 = gsl_matrix_alloc(nbeta01,nbeta01);
+      pmatrix12 = gsl_matrix_alloc(nbeta12,nbeta12);
+      for (int i=0; i<nbeta01; ++i)
+	for (int j=0; j<nbeta01; ++j)
+	  gsl_matrix_set(pmatrix01,i,j,_pmatrix01(i,j));
+      for (int i=0; i<nbeta12; ++i)
+	for (int j=0; j<nbeta12; ++j)
+	  gsl_matrix_set(pmatrix12,i,j,_pmatrix12(i,j));
       sp01 = args("sp01");
       sp12 = args("sp12");
       s01 = new ps(as<double>(args("lower01")), // lower boundary
@@ -777,6 +783,7 @@ namespace { // anonymous
 		   40.0, // centre
 		   as<int>(args("nterm12")) // = nbeta12-2
 		   );
+      _pmatrix01.free(); _pmatrix12.free();
     }
     double pnegll() {
       double pnegll = Purged::negll();
@@ -796,26 +803,28 @@ namespace { // anonymous
       return pnegll;
     }
     Vector pnegll_gradient() {
-      Vector pnegll_gradient(negll_gradient());
+      Vector grad(negll_gradient());
+      Vector pgrad(grad);
       gsl_vector *v01, *v12;
       v01 = gsl_vector_alloc(beta01->size);
       gsl_blas_dgemv(CblasNoTrans, 1.0, pmatrix01, beta01, 0.0, v01);
       int j=1; // ignore intercept term
       for (size_t i=0; i<nbeta01; ++i, ++j)
-	pnegll_gradient[j] = pnegll_gradient[j] + sp01*gsl_vector_get(v01,i); // add positive penalty
+	pgrad[j] = pgrad[j] + sp01*gsl_vector_get(v01,i); // add positive penalty
       j++; // ignore next intercept term
       v12 = gsl_vector_alloc(beta12->size);
       gsl_blas_dgemv(CblasNoTrans, 1.0, pmatrix12, beta12, 0.0, v12);
       for (size_t i=0; i<nbeta12; ++i, ++j)
-	pnegll_gradient[j] = pnegll_gradient[j] + sp12*gsl_vector_get(v12,i); // add positive penalty
+	pgrad[j] = pgrad[j] + sp12*gsl_vector_get(v12,i); // add positive penalty
       // tidy up
       gsl_vector_free(v01);
       gsl_vector_free(v12);
-      return pnegll_gradient;
+      grad.free();
+      return pgrad;
     }
     virtual ~PurgedPS() {
       delete s01; delete s12;
-      pmatrix01.free(); pmatrix12.free();
+      gsl_matrix_free(pmatrix01); gsl_matrix_free(pmatrix12);
     }
   };
 
@@ -954,7 +963,7 @@ namespace { // anonymous
       return value;
     }
     Rprintf("call_purged_ns: output_type not matched (\"%s\").\n",output_type.c_str());
-    return wrap(model.negll()); // default
+    return wrap(true); // default
   }
 
   RcppExport 
@@ -1008,7 +1017,7 @@ namespace { // anonymous
       return value;
     }
     Rprintf("call_purged_ps: output_type not matched (\"%s\").\n",output_type.c_str());
-    return wrap(model.negll()); // default
+    return wrap(true); // default
   }
 
 }
