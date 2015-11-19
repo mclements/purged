@@ -56,23 +56,40 @@ namespace { // anonymous
       Rprintf("%f ", gsl_vector_get(vec, i));
     }
   }
-  void Rprint(RcppGSL::matrix<double> mat) {
-    size_t i, j;
-    for (i=0; i < mat->size1; ++i) {
-      for (j=0; j < mat->size2; ++j) 
-	Rprintf("%f ", gsl_matrix_get(mat, i, j));
-      Rprintf("\n");
-    }
-  }
-  void Rprint(Vector vec) {
-    size_t i;
-    for (i=0; i < vec->size; ++i) {
-      Rprintf("%f ", gsl_vector_get(vec, i));
-    }
-  }
   // template<class T> T bounds(T x, T lo, T hi) { return x<lo ? lo : (x>hi ? hi : x); } 
   inline
   double bounds(double x, double lo, double hi) { return x<lo ? lo : (x>hi ? hi : x); } 
+  gsl_vector * as_vector(SEXP sexp) {
+    Rcpp::NumericVector nv = as<Rcpp::NumericVector>(sexp);
+    gsl_vector *out;
+    out = gsl_vector_alloc(nv.size());
+    for (int i=0; i<nv.size(); ++i)
+      gsl_vector_set(out,i,nv[i]);
+    return out;
+  }
+  gsl_matrix * as_matrix(SEXP sexp) {
+    Rcpp::NumericMatrix nm = as<Rcpp::NumericMatrix>(sexp);
+    gsl_matrix *out;
+    out = gsl_matrix_alloc(nm.nrow(), nm.ncol());
+    for (int i=0; i<nm.nrow(); ++i)
+      for (int j=0; j<nm.ncol(); ++j)
+	gsl_matrix_set(out,i,j,nm(i,j));
+    return out;
+  }
+  gsl_vector_int * as_vector_int(SEXP sexp) {
+    Rcpp::IntegerVector iv = as<Rcpp::IntegerVector>(sexp);
+    gsl_vector_int *out;
+    out = gsl_vector_int_alloc(iv.size());
+    for (int i=0; i<iv.size(); ++i)
+      gsl_vector_int_set(out,i,iv[i]);
+    return out;
+  }
+  SEXP wrap_vector(gsl_vector * vec) {
+    Rcpp::NumericVector nv(vec->size);
+    for (size_t i=0; i<vec->size; ++i)
+      nv[i] = gsl_vector_get(vec,i);
+    return wrap(nv);
+  }
   
   class ns : public splineBasis {
   public:
@@ -311,72 +328,51 @@ namespace { // anonymous
     bool debug;
     // Params fields
     double int01, int12, beta20, maxage;
-    size_t nstate, ncoef, nbeta01, nbeta12;
+    size_t N, nstate, ncoef, nbeta01, nbeta12;
     gsl_spline *spline0, *spline1, *spline2;
     gsl_interp_accel *acc0, *acc1, *acc2;
     splineBasis *s01;
     splineBasis *s12;
     std::map<P_ij_key,double> P_ijs;
-    std::map<P_ij_key,Vector> dP_ijs; // map of pointers: care required
+    std::map<P_ij_key,gsl_vector *> dP_ijs; // map of pointers: care required
     gsl_odeiv2_system sys;
     gsl_odeiv2_driver *d;
     // data fields
     gsl_vector_int *recall, *finalState;
-    gsl_vector *time1, *time2, *time3, *freq, *beta01, *beta12;
-    Purged(SEXP sexp, int N, int nbeta01, int nbeta12, int nages0) : 
-      nstate(4), ncoef(3+nbeta01+nbeta12), nbeta01(nbeta01), nbeta12(nbeta12) {
+    gsl_vector *time1, *time2, *time3, *freq, *beta01, *beta12, *ages0, *mu0, *mu1, *mu2;
+    Purged(SEXP sexp) {
       List args = as<List>(sexp);
       debug = args("debug");
-      RcppGSL::vector<int>
-	_finalState(as<RcppGSL::vector<int> >(args("finalState"))),
-	_recall(as<RcppGSL::vector<int> >(args("recall")));
-      RcppGSL::Vector 
-	_time1(as<Vector>(args("time1"))),
-	_time2(as<Vector>(args("time2"))),
-	_time3(as<Vector>(args("time3"))),
-	_freq(as<Vector>(args("freq"))),
-	_beta01(as<Vector>(args("beta01"))),
-	_beta12(as<Vector>(args("beta12"))),
-	ages0(as<Vector>(args("ages0"))),
-	mu0(as<Vector>(args("mu0"))),
-	mu1(as<Vector>(args("mu1"))),
-	mu2(as<Vector>(args("mu2")));
+      finalState = as_vector_int(args("finalState"));
+      recall = as_vector_int(args("recall"));
+      time1 = as_vector(args("time1"));
+      time2 = as_vector(args("time2"));
+      time3 = as_vector(args("time3"));
+      freq = as_vector(args("freq"));
+      beta01 = as_vector(args("beta01"));
+      beta12 = as_vector(args("beta12"));
+      ages0 = as_vector(args("ages0"));
+      mu0 = as_vector(args("mu0"));
+      mu1 = as_vector(args("mu1"));
+      mu2 = as_vector(args("mu2"));
       int01 = args("int01"); 
       int12 = args("int12"); 
       beta20 = args("beta20"); 
-      finalState = gsl_vector_int_alloc(N);
-      recall = gsl_vector_int_alloc(N);
-      freq = gsl_vector_alloc(N);
-      time1 = gsl_vector_alloc(N);
-      time2 = gsl_vector_alloc(N);
-      time3 = gsl_vector_alloc(N);
-      beta01 = gsl_vector_alloc(nbeta01);
-      beta12 = gsl_vector_alloc(nbeta12);
-      for (int i=0; i<N; ++i) {
-	gsl_vector_int_set(finalState,i,_finalState[i]); 
-	gsl_vector_int_set(recall,i,_recall[i]); 
-	gsl_vector_set(time1,i,_time1[i]); 
-	gsl_vector_set(time2,i,_time2[i]); 
-	gsl_vector_set(time3,i,_time3[i]); 
-	gsl_vector_set(freq,i,_freq[i]); 
-      }
-      for (size_t i=0; i<beta01->size; ++i)
-	gsl_vector_set(beta01,i, _beta01[i]); 
-      for (size_t i=0; i<beta12->size; ++i)
-	gsl_vector_set(beta12,i, _beta12[i]); 
+      N = time1->size;
+      nstate = 4;
+      nbeta01 = beta01->size;
+      nbeta12 = beta12->size;
+      ncoef = 3+nbeta01+nbeta12;
       acc0 = gsl_interp_accel_alloc ();
       acc1 = gsl_interp_accel_alloc ();
       acc2 = gsl_interp_accel_alloc ();
-      spline0 = gsl_spline_alloc (gsl_interp_cspline, ages0.size());
-      spline1 = gsl_spline_alloc (gsl_interp_cspline, ages0.size());
-      spline2 = gsl_spline_alloc (gsl_interp_cspline, ages0.size());
-      gsl_spline_init (spline0, ages0->data, mu0->data, ages0.size());
-      gsl_spline_init (spline1, ages0->data, mu1->data, ages0.size());
-      gsl_spline_init (spline2, ages0->data, mu2->data, ages0.size());
-      maxage = ages0[ages0.size()-1]+0.5;
-      ages0.free(); mu0.free(); mu1.free(); mu2.free();
-      _recall.free(); _finalState.free(); _time1.free(); _time2.free(); _time3.free();
-      _freq.free(); _beta01.free(); _beta12.free();
+      spline0 = gsl_spline_alloc (gsl_interp_cspline, ages0->size);
+      spline1 = gsl_spline_alloc (gsl_interp_cspline, ages0->size);
+      spline2 = gsl_spline_alloc (gsl_interp_cspline, ages0->size);
+      gsl_spline_init (spline0, ages0->data, mu0->data, ages0->size);
+      gsl_spline_init (spline1, ages0->data, mu1->data, ages0->size);
+      gsl_spline_init (spline2, ages0->data, mu2->data, ages0->size);
+      maxage = gsl_vector_get(ages0,ages0->size-1)+0.5;
       if (debug)
 	Rprintf("maxage=%f\n",maxage);
       sys.jacobian = 0; 
@@ -395,6 +391,10 @@ namespace { // anonymous
       gsl_vector_free(freq);
       gsl_vector_free(beta01);
       gsl_vector_free(beta12);
+      gsl_vector_free(ages0);
+      gsl_vector_free(mu0);
+      gsl_vector_free(mu1);
+      gsl_vector_free(mu2);
       gsl_spline_free (spline0);
       gsl_spline_free (spline1);
       gsl_spline_free (spline2);
@@ -407,7 +407,7 @@ namespace { // anonymous
     }
     void dP_ijs_clear() {
       for (dP_ij_t::iterator it = dP_ijs.begin(); it != dP_ijs.end(); it++)
-	it->second.free();
+	gsl_vector_free(it->second);
       dP_ijs.clear();
     }
     void default_sys() {
@@ -449,7 +449,7 @@ namespace { // anonymous
 	total += P_ij(i,k,s,t);
       return total;
     }
-    Vector
+    gsl_vector *
     dP_ij(int i, int j, double s, double t, double eps = 1e-10) {
       // do we have the values cached?
       P_ij_key key = P_ij_key(i,j,s,t);
@@ -466,18 +466,19 @@ namespace { // anonymous
 	REprintf ("error, return value=%d\n", status);
       // cache the results
       for (size_t k=0; k<nstate; ++k) { // state
-	Vector out(ncoef);
+	gsl_vector * out; 
+	out = gsl_vector_alloc(ncoef);
 	P_ij_key key_ik = P_ij_key(i,k,s,t);
 	P_ijs[key_ik] = y[k]<eps && -eps<y[k] ? eps : y[k];
 	for (size_t m=0; m<ncoef; ++m) 
-	  out[m] = y[nstate*(m+1)+k]; // (y, P1', P2', ..., Pncoef')
+	  gsl_vector_set(out, m, y[nstate*(m+1)+k]); // (y, P1', P2', ..., Pncoef')
 	dP_ijs.insert(dP_ij_t::value_type(key_ik, out));
       }
       return dP_ijs.find(key)->second;
     }
-    Vector dP_iK(int i, double s, double t) {
-      Vector total(ncoef); // freed in negll_gradient_component()
-      gsl_vector_set_all(total,0.0);
+    gsl_vector * dP_iK(int i, double s, double t) {
+      gsl_vector * total;
+      total = gsl_vector_calloc(ncoef); // freed in negll_gradient_component()
       for (size_t k=0; k<nstate; ++k) {
 	gsl_vector_add(total,dP_ij(i,k,s,t));
       }
@@ -523,39 +524,41 @@ namespace { // anonymous
     }
     /** @brief Rate of change wrt theta_u (cf. partial) of mu_ij = (partial mu_ij / partial theta_u) / mu_ij 
      **/
-    Vector rmu_ij(int i, int j, double t)
+    gsl_vector * rmu_ij(int i, int j, double t)
     {
-      Vector x(ncoef); // freed in negll_gradient_component()
-      gsl_vector_set_all(x, 0.0);
+      gsl_vector * x;
+      x = gsl_vector_calloc(ncoef); // freed in negll_gradient_component()
       int k = 0;
       // set theta and x 
       // intercept
       if (i==Never && j==Current) {
 	k=0;
-	x[k++] = 1;
+	gsl_vector_set(x, k++, 1);
 	// spline parameters
-	Vector _beta01(nbeta01);
+	gsl_vector * _beta01; 
+	_beta01 = gsl_vector_alloc(nbeta01);
 	s01->calcBasis(t, _beta01);
 	for (size_t n = 0; n<nbeta01; ++n) {
-	  x[k++]=gsl_vector_get(_beta01,n);
+	  gsl_vector_set(x, k++, gsl_vector_get(_beta01,n));
 	}
-	_beta01.free();
+	gsl_vector_free(_beta01);
       }
       else if (i==Current && j==Former) {
 	k=nbeta01+1-1;
 	// intercept
-	x[k++] = 1;
+	gsl_vector_set(x, k++, 1);
 	// spline parameters
-	Vector _beta12(nbeta12);
+	gsl_vector * _beta12;
+	_beta12 = gsl_vector_alloc(nbeta12);
 	s12->calcBasis(t, _beta12);
 	for (size_t n = 0; n<nbeta12; ++n) {
-	  x[k++] = gsl_vector_get(_beta12,n);
+	  gsl_vector_set(x, k++, gsl_vector_get(_beta12,n));
 	}
-	_beta12.free();
+	gsl_vector_free(_beta12);
       }
       else if (i==Former && j==Reclassified) {
 	k=nbeta01+nbeta12+2-1;
-	x[k++] = 1;
+	gsl_vector_set(x, k++, 1);
       }
       else REprintf("Unexpected combinations of states in rmu_ij: %i to %j.\n",i,j);
       return x;
@@ -600,80 +603,89 @@ namespace { // anonymous
       ll -= log(P_iK(Never,0.0,u));
       return -ll*freq;
     }
-    Vector negll_gradient_component(int state, double s, double t, double u, double freq = 1.0, int recall = 1) {
-      Vector gradient(ncoef);
-      gsl_vector_set_all(gradient,0.0);
+    gsl_vector * negll_gradient_component(int state, double s, double t, double u, double freq = 1.0, int recall = 1) {
+      gsl_vector * gradient;
+      gradient = gsl_vector_calloc(ncoef);
       if (recall == Recall) { // recall of smoking history available
 	if (state == Never) // Never->Never _and_ Never->Reclassified (equiv to current status)
 	  for (size_t k=0; k<ncoef; ++k)
-	    gradient[k] = (dP_ij(Never,Never,0.0,u)[k]+
-			   dP_ij(Never,Reclassified,0.0,u)[k]) / 
-	      (P_ij(Never,Never,0.0,u)+P_ij(Never,Reclassified,0.0,u)); // ignore s and t
+	    gsl_vector_set(gradient, k,
+			   (gsl_vector_get(dP_ij(Never,Never,0.0,u), k)+
+			    gsl_vector_get(dP_ij(Never,Reclassified,0.0,u), k)) / 
+			   (P_ij(Never,Never,0.0,u)+P_ij(Never,Reclassified,0.0,u))); // ignore s and t
 	if (state == Current) {
-	  Vector rmu01(rmu_ij(Never,Current,s));
+	  gsl_vector * rmu01 = rmu_ij(Never,Current,s);
 	  for (size_t k=0; k<ncoef; ++k) 
-	    gradient[k] = dP_ij(Never,Never,0.0,s)[k] / P_ij(Never,Never,0.0,s)+
-	      rmu01[k]+
-	      dP_ij(Current,Current,s,u)[k]/P_ij(Current,Current,s,u); // ignore t
-	  rmu01.free();
-	  }
+	    gsl_vector_set(gradient, k, 
+			   gsl_vector_get(dP_ij(Never,Never,0.0,s),k) / P_ij(Never,Never,0.0,s)+
+			   gsl_vector_get(rmu01,k)+
+			   gsl_vector_get(dP_ij(Current,Current,s,u),k)/P_ij(Current,Current,s,u)); // ignore t
+	  gsl_vector_free(rmu01);
+	}
 	if (state == Former) {
-	  Vector rmu01(rmu_ij(Never,Current,s)), rmu12(rmu_ij(Current,Former,t));
+	  gsl_vector *rmu01 = rmu_ij(Never,Current,s), 
+	    *rmu12 = rmu_ij(Current,Former,t);
 	  for (size_t k=0; k<ncoef; ++k)
-	    gradient[k] = dP_ij(Never,Never,0.0,s)[k]/P_ij(Never,Never,0.0,s)+
-	      rmu_ij(Never,Current,s)[k]+
-	      dP_ij(Current,Current,s,t)[k]/P_ij(Current,Current,s,t)+
-	      rmu12[k]+
-	      dP_ij(Former,Former,t,u)[k]/P_ij(Former,Former,t,u);
-	  rmu01.free(); rmu12.free();
+	    gsl_vector_set(gradient, k,
+			   gsl_vector_get(dP_ij(Never,Never,0.0,s),k)/P_ij(Never,Never,0.0,s)+
+			   gsl_vector_get(rmu01,k) +
+			   gsl_vector_get(dP_ij(Current,Current,s,t),k)/P_ij(Current,Current,s,t)+
+			   gsl_vector_get(rmu12,k) +
+			   gsl_vector_get(dP_ij(Former,Former,t,u),k)/P_ij(Former,Former,t,u));
+	  gsl_vector_free(rmu01); gsl_vector_free(rmu12);
 	}
       }
       if (recall == CurrentStatus) {// current status only
 	if (state == Never) // Never->Never _and_ Never->Reclassified (equiv to current status)
 	  for (size_t k=0; k<ncoef; ++k)
-	    gradient[k] = (dP_ij(Never,Never,0.0,u)[k]+
-			   dP_ij(Never,Reclassified,0.0,u)[k]) / 
-	      (P_ij(Never,Never,0.0,u)+P_ij(Never,Reclassified,0.0,u)); // ignore s and t
+	    gsl_vector_set(gradient, k,
+			   (gsl_vector_get(dP_ij(Never,Never,0.0,u),k)+
+			    gsl_vector_get(dP_ij(Never,Reclassified,0.0,u),k)) / 
+			   (P_ij(Never,Never,0.0,u)+P_ij(Never,Reclassified,0.0,u))); // ignore s and t
 	else 
 	  for (size_t k=0; k<ncoef; ++k)
-	    gradient[k] = dP_ij(Never,state,0.0,u)[k]/P_ij(Never,state,0.0,u);
+	    gsl_vector_set(gradient, k, 
+			   gsl_vector_get(dP_ij(Never,state,0.0,u),k)/P_ij(Never,state,0.0,u));
       }
       if (recall == FormerWithCessation && state == Former) {// recall of age quit (not initiation) for former smokers
-	Vector rmu12(rmu_ij(Current,Former,t));
+	gsl_vector * rmu12 = rmu_ij(Current,Former,t);
 	for (size_t k=0; k<ncoef; ++k)
-	  gradient[k] = dP_ij(Never,Current,0.0,t)[k]/P_ij(Never,Current,0.0,t) + 
-	    rmu12[k]+
-	    dP_ij(Former,Former,t,u)[k]/P_ij(Former,Former,t,u); // ignores s
-	rmu12.free();
+	  gsl_vector_set(gradient, k, 
+			 gsl_vector_get(dP_ij(Never,Current,0.0,t),k)/P_ij(Never,Current,0.0,t) + 
+			 gsl_vector_get(rmu12,k)+
+			 gsl_vector_get(dP_ij(Former,Former,t,u),k)/P_ij(Former,Former,t,u)); // ignores s
+	gsl_vector_free(rmu12);
       }
       // if (ll == 0.0) REprintf("ll==0.0? (state=%i, recall=%i)\n",state,recall);
-      Vector dP(dP_iK(Never,0.0,u));
+      gsl_vector * dP = dP_iK(Never,0.0,u);
       for (size_t k=0; k<ncoef; ++k) {
-	gradient[k] = gradient[k] - dP[k] / P_iK(Never,0.0,u);
+	gsl_vector_set(gradient, k, gsl_vector_get(gradient,k) - 
+		       gsl_vector_get(dP,k) / P_iK(Never,0.0,u));
       }
-      dP.free();
+      gsl_vector_free(dP);
       for (size_t k=0; k<ncoef; ++k)
-	gradient[k] = -gradient[k]*freq;
+	gsl_vector_set(gradient,k, -gsl_vector_get(gradient,k)*freq);
       return gradient;
     }
-    Vector
+    gsl_vector *
     negll_gradient(bool clear_values = true) {
       // clear the stored values
       if (clear_values) {
 	P_ijs.clear();
 	dP_ijs_clear();
       }
-      Vector total(ncoef);
-      gsl_vector_set_all(total, 0.0);
+      gsl_vector * total;
+      total = gsl_vector_calloc(ncoef);
       for (size_t i = 0; i< finalState->size; ++i) {
-	Vector component(negll_gradient_component(gsl_vector_int_get(finalState,i), 
-						  gsl_vector_get(time1,i), 
-						  gsl_vector_get(time2,i), 
-						  gsl_vector_get(time3,i), 
-						  gsl_vector_get(freq,i), 
-						  gsl_vector_int_get(recall,i)));
+	gsl_vector * component = 
+	  negll_gradient_component(gsl_vector_int_get(finalState,i), 
+				   gsl_vector_get(time1,i), 
+				   gsl_vector_get(time2,i), 
+				   gsl_vector_get(time3,i), 
+				   gsl_vector_get(freq,i), 
+				   gsl_vector_int_get(recall,i));
 	gsl_vector_add(total,component);
-	component.free();
+	gsl_vector_free(component);
       }
       return total;
     }
@@ -720,16 +732,12 @@ namespace { // anonymous
 
   class PurgedNS : public Purged {
   public:
-    PurgedNS(SEXP sexp, int N, int nbeta01, int nbeta12, int nages0) : 
-      Purged(sexp, N, nbeta01, nbeta12, nages0) 
+    PurgedNS(SEXP sexp) : 
+      Purged(sexp) 
     {
       List args = as<List>(sexp);
-      // initial parameters for initiation
-      // Vector knots01(nbeta01+1), knots12(nbeta12+1);
-      // knots01 = args("knots01");
-      // knots12 = args("knots12");
-      Vector knots01(as<Vector>(args("knots01")));
-      Vector knots12(as<Vector>(args("knots12")));
+      gsl_vector * knots01 = as_vector(args("knots01"));
+      gsl_vector * knots12 = as_vector(args("knots12"));
       s01 = new ns(knots01, 
 		   false, // intercept
 		   true, // centred
@@ -741,7 +749,7 @@ namespace { // anonymous
 		   true, // centred
 		   40.0 // centre
 		   );
-      knots01.free(); knots12.free();
+      gsl_vector_free(knots01); gsl_vector_free(knots12);
     }
     ~PurgedNS() {
       delete s01; 
@@ -753,19 +761,10 @@ namespace { // anonymous
   public:
     gsl_matrix *pmatrix01, *pmatrix12;
     double sp01, sp12;
-    PurgedPS(SEXP sexp, int N, int nbeta01, int nbeta12, int nages0) : 
-      Purged(sexp, N, nbeta01, nbeta12, nages0) {
+    PurgedPS(SEXP sexp) : Purged(sexp) {
       List args = as<List>(sexp);
-      RcppGSL::Matrix _pmatrix01(as<RcppGSL::Matrix>(args("pmatrix01")));
-      RcppGSL::Matrix _pmatrix12(as<RcppGSL::Matrix>(args("pmatrix12")));
-      pmatrix01 = gsl_matrix_alloc(nbeta01,nbeta01);
-      pmatrix12 = gsl_matrix_alloc(nbeta12,nbeta12);
-      for (int i=0; i<nbeta01; ++i)
-	for (int j=0; j<nbeta01; ++j)
-	  gsl_matrix_set(pmatrix01,i,j,_pmatrix01(i,j));
-      for (int i=0; i<nbeta12; ++i)
-	for (int j=0; j<nbeta12; ++j)
-	  gsl_matrix_set(pmatrix12,i,j,_pmatrix12(i,j));
+      pmatrix01 = as_matrix(args("pmatrix01"));
+      pmatrix12 = as_matrix(args("pmatrix12"));
       sp01 = args("sp01");
       sp12 = args("sp12");
       s01 = new ps(as<double>(args("lower01")), // lower boundary
@@ -783,7 +782,6 @@ namespace { // anonymous
 		   40.0, // centre
 		   as<int>(args("nterm12")) // = nbeta12-2
 		   );
-      _pmatrix01.free(); _pmatrix12.free();
     }
     double pnegll() {
       double pnegll = Purged::negll();
@@ -802,24 +800,23 @@ namespace { // anonymous
       gsl_vector_free(v12);
       return pnegll;
     }
-    Vector pnegll_gradient() {
-      Vector grad(negll_gradient());
-      Vector pgrad(grad);
+    gsl_vector * pnegll_gradient() {
+      gsl_vector * pgrad = negll_gradient();
       gsl_vector *v01, *v12;
       v01 = gsl_vector_alloc(beta01->size);
       gsl_blas_dgemv(CblasNoTrans, 1.0, pmatrix01, beta01, 0.0, v01);
       int j=1; // ignore intercept term
       for (size_t i=0; i<nbeta01; ++i, ++j)
-	pgrad[j] = pgrad[j] + sp01*gsl_vector_get(v01,i); // add positive penalty
+	gsl_vector_set(pgrad, j, gsl_vector_get(pgrad,j) + sp01*gsl_vector_get(v01,i)); // add positive penalty
       j++; // ignore next intercept term
       v12 = gsl_vector_alloc(beta12->size);
       gsl_blas_dgemv(CblasNoTrans, 1.0, pmatrix12, beta12, 0.0, v12);
       for (size_t i=0; i<nbeta12; ++i, ++j)
-	pgrad[j] = pgrad[j] + sp12*gsl_vector_get(v12,i); // add positive penalty
+	gsl_vector_set(pgrad, j, 
+		       gsl_vector_get(pgrad,j) + sp12*gsl_vector_get(v12,i)); // add positive penalty
       // tidy up
       gsl_vector_free(v01);
       gsl_vector_free(v12);
-      grad.free();
       return pgrad;
     }
     virtual ~PurgedPS() {
@@ -880,32 +877,31 @@ namespace { // anonymous
     double alpha01, alpha12, alpha20, mu0, mu1, mu2;
     double dalpha01, dalpha12, dalpha20;
     Purged* P = static_cast<Purged*>(model);
-    Vector x01(P->ncoef), x12(P->ncoef), x20(P->ncoef);
-    Vector basis01(P->nbeta01), basis12(P->nbeta12);
+    gsl_vector *x01; x01 = gsl_vector_calloc(P->ncoef);
+    gsl_vector *x12; x12 = gsl_vector_calloc(P->ncoef);
+    gsl_vector *x20; x20 = gsl_vector_calloc(P->ncoef);
+    gsl_vector *basis01; basis01 = gsl_vector_alloc(P->nbeta01);
+    gsl_vector *basis12; basis12 = gsl_vector_alloc(P->nbeta12);
     int j = 0;
     double eps = 1e-16;
-    // initialise vectors to zero
-    gsl_vector_set_all(x01,0.0);
-    gsl_vector_set_all(x12,0.0);
-    gsl_vector_set_all(x20,0.0);
     // calculate design vectors for the splines
     P->s01->calcBasis(t, basis01);
     P->s12->calcBasis(t, basis12);
     // set x 
     // intercept for 0->1
-    x01[j++] = 1;
+    gsl_vector_set(x01, j++, 1);
     // spline parameters for 0->1
     for (size_t i = 0; i < P->nbeta01; ++i) {
-      x01[j++] = gsl_vector_get(basis01,i); // unclear why the gsl_vector_get() call is needed
+      gsl_vector_set(x01, j++,  gsl_vector_get(basis01,i)); // unclear why the gsl_vector_get() call is needed
     }
     // intercept for 1->2
-    x12[j++] = 1;
+    gsl_vector_set(x12, j++, 1);
     // spline parameters for 1->2
     for (size_t i = 0; i < P->nbeta12; ++i) {
-      x12[j++] = gsl_vector_get(basis12,i);
+      gsl_vector_set(x12, j++, gsl_vector_get(basis12,i));
     }
     // intercept for 2->0
-    x20[j++] = 1;
+    gsl_vector_set(x20, j++, 1);
     // calculate rates
     alpha01 = P->mu_ij(Never,Current,t);
     alpha12 = P->mu_ij(Current,Former,t);
@@ -920,9 +916,9 @@ namespace { // anonymous
     f[Reclassified] = alpha20*y[Former];
     // d/dt (partial P(s,t)/partial theta) = (partial P(s,t)/partial theta)*alpha + P(s,t)(partial alpha / partial theta)
     for (int offset=P->nstate, i=0; i < (int) P->ncoef; ++i, offset += P->nstate) {
-      dalpha01 = alpha01 * x01[i];
-      dalpha12 = alpha12 * x12[i];
-      dalpha20 = alpha20 * x20[i];
+      dalpha01 = alpha01 * gsl_vector_get(x01,i);
+      dalpha12 = alpha12 * gsl_vector_get(x12,i);
+      dalpha20 = alpha20 * gsl_vector_get(x20,i);
       f[Never+offset] = - (alpha01*y[Never+offset] + dalpha01*y[Never]);
       f[Current+offset] = alpha01*y[Never+offset] + dalpha01*y[Never] -
 	((alpha12+std::max(eps,mu1-mu0))*y[Current+offset] + dalpha12*y[Current]);
@@ -931,8 +927,8 @@ namespace { // anonymous
       f[Reclassified+offset] = alpha20*y[Former+offset] + dalpha20*y[Former];
     }
     // tidy up
-    x01.free(); x12.free(); x20.free();
-    basis01.free(); basis12.free();
+    gsl_vector_free(x01); gsl_vector_free(x12); gsl_vector_free(x20);
+    gsl_vector_free(basis01); gsl_vector_free(basis12);
     return GSL_SUCCESS;
   }
 
@@ -940,26 +936,22 @@ namespace { // anonymous
   SEXP call_purged_ns(SEXP sexp) {
     List args = as<List>(sexp);
     // bool debug = as<bool>(args("debug"));
-    PurgedNS model(sexp, 
-		   as<int>(args("N")), 
-		   as<int>(args("nbeta01")),
-		   as<int>(args("nbeta12")),
-		   as<int>(args("nages0")));
+    PurgedNS model(sexp);
     std::string output_type = args("output_type");
     if (output_type == "negll")
       return wrap(model.negll());
     if (output_type == "negll_gradient") {
-      Vector grad(model.negll_gradient());
-      SEXP value = wrap(grad);
-      grad.free();
+      gsl_vector * grad = model.negll_gradient();
+      SEXP value = wrap_vector(grad);
+      gsl_vector_free(grad);
       return value;
     }
     if (output_type == "P_ij")
       return wrap(model.P_ij(Never,Reclassified,0.0, 50.0));
     if (output_type == "dP_ij") {
-      Vector dP(model.dP_ij(Never,Reclassified,0.0, 50.0));
-      SEXP value = wrap(dP);
-      dP.free();
+      gsl_vector * dP = model.dP_ij(Never,Reclassified,0.0, 50.0);
+      SEXP value = wrap_vector(dP);
+      gsl_vector_free(dP);
       return value;
     }
     Rprintf("call_purged_ns: output_type not matched (\"%s\").\n",output_type.c_str());
@@ -986,24 +978,20 @@ namespace { // anonymous
   SEXP call_purged_ps(SEXP sexp) {
     List args = as<List>(sexp);
     // bool debug = as<bool>(args("debug"));
-    PurgedPS model(sexp,
-		   as<int>(args("N")), 
-		   as<int>(args("nbeta01")),
-		   as<int>(args("nbeta12")),
-		   as<int>(args("nages0")));
+    PurgedPS model(sexp);
     std::string output_type = args("output_type");
     if (output_type == "negll")
       return wrap(model.negll());
     if (output_type == "negll_gradient") {
-      Vector grad(model.negll_gradient());
-      SEXP value = wrap(grad);
-      grad.free();
+      gsl_vector * grad = model.negll_gradient();
+      SEXP value = wrap_vector(grad);
+      gsl_vector_free(grad);
       return value;
     }
     if (output_type == "pnegll_gradient") {
-      Vector grad(model.pnegll_gradient());
-      SEXP value = wrap(grad);
-      grad.free();
+      gsl_vector * grad = model.pnegll_gradient();
+      SEXP value = wrap_vector(grad);
+      gsl_vector_free(grad);
       return value;
     }
     if (output_type == "pnegll")
@@ -1011,9 +999,9 @@ namespace { // anonymous
     if (output_type == "P_ij")
       return wrap(model.P_ij(Never,Reclassified,0.0, 50.0));
     if (output_type == "dP_ij") {
-      Vector dP(model.dP_ij(Never,Reclassified,0.0, 50.0));
-      SEXP value = wrap(dP);
-      dP.free();
+      gsl_vector * dP = model.dP_ij(Never,Reclassified,0.0, 50.0);
+      SEXP value = wrap_vector(dP);
+      gsl_vector_free(dP);
       return value;
     }
     Rprintf("call_purged_ps: output_type not matched (\"%s\").\n",output_type.c_str());

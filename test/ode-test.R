@@ -76,6 +76,7 @@ stratifiedData2 <- lapply(stratifiedData, function(obj)
                  list(sex=obj[[1]]$sex, cohort=obj[[3]]$cohort, mort=obj[[3]]$mort,
                       smoking=do.call("rbind", lapply(obj, function(elt) elt$smoking))))
 
+
 ## testing and optimisation for ps
 test <- function(callName="call_purged_ps",init,stratum,sp01=0.1,sp12=1,output_type="negll",debug=FALSE) {
     nterm01 <- nterm12 <- 5
@@ -239,8 +240,8 @@ init <- c(-1.91166383109674, 3.84976690180782, 0.445314035540679,
           -4.86139268487933, -0.344483039469035, 0.979805469221358,
           -3.53232595501467)
 ##debug(test)
-test("call_purged_ns",init=init,stratum=stratifiedData2[[10]], output_type="negll_gradient")
 test("call_purged_ns",init=init,stratum=stratifiedData2[[10]], output_type="negll")
+test("call_purged_ns",init=init,stratum=stratifiedData2[[10]], output_type="negll_gradient")
 
 
 ## optimize ns
