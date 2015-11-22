@@ -76,8 +76,9 @@ stratifiedData2 <- lapply(stratifiedData, function(obj)
                  list(sex=obj[[1]]$sex, cohort=obj[[3]]$cohort, mort=obj[[3]]$mort,
                       smoking=do.call("rbind", lapply(obj, function(elt) elt$smoking))))
 
-
 ## testing and optimisation for ps
+require(DEoptim)
+require(RcppDE)
 test <- function(callName="call_purged_ps",init,stratum,sp01=0.1,sp12=1,output_type="negll",debug=FALSE) {
     nterm01 <- nterm12 <- 5
     smoking <- stratum$smoking
@@ -133,10 +134,30 @@ test <- function(callName="call_purged_ps",init,stratum,sp01=0.1,sp12=1,output_t
         args$output_type <- output_type
         .Call(callName, args, package="purged")
     }
-    if (output_type == "optim") {
+    if (output_type == "optim_sann") {
+        fit <- optim(init,objective,method="SANN",control=list(maxit=500))
+        fit$hessian <- optimHess(fit$par,objective,gradient)
+        fit$vcov <- solve(fit$hessian)
+        return(fit)
+    }
+    if (output_type == "optim_nlminb") {
         fit <- nlminb(init,objective,gradient)
         fit$hessian <- optimHess(fit$par,objective,gradient)
         fit$vcov <- solve(fit$hessian)
+        return(fit)
+    }
+    if (output_type == "optim_DEoptim") {
+        fit <- DEoptim::DEoptim(objective,lower=rep(-10,length(init)),upper=rep(10,length(init)))
+        ## fit$hessian <- optimHess(fit$par,objective,gradient)
+        ## fit$vcov <- solve(fit$hessian)
+        return(fit)
+    }
+    if (output_type == "optim_RcppDE") {
+        fit <- RcppDE::DEoptim(objective,lower=rep(-10,length(init)),upper=rep(10,length(init)),
+                               DEoptim.control(NP = 200,
+                                                 itermax = 400, F = 1.2, CR = 0.7))
+        ## fit$hessian <- optimHess(fit$par,objective,gradient)
+        ## fit$vcov <- solve(fit$hessian)
         return(fit)
     }
     return(fun(init))
@@ -171,8 +192,14 @@ test("call_purged_ps",init,sp01=0.1,sp12=1,stratum=stratifiedData2[[10]],output_
 zapsmall(sapply(1:length(init), function(i)
                 dtest("call_purged_ps",beta=init,stratum=stratifiedData2[[10]],sp01=0.1,sp12=1,
                       output_type="negll",i=i, eps=1e-6)))
+
 system.time(fit <- test("call_purged_ps",init,sp01=0.1,sp12=1,stratum=stratifiedData2[[10]],
-                        output_type="optim",debug=FALSE))
+                        output_type="optim_sann",debug=FALSE))
+## init.sann <- c(-1.886, 1.984, 5.355, 4.667, 1.434, 1.251, 3.256, 0.322, -3.677, -4.775, -1.263, -1.474, -0.857, -0.541, -0.849, 4.577, -4.479)
+system.time(fit2 <- test("call_purged_ps",fit$par,sp01=0.1,sp12=1,stratum=stratifiedData2[[10]],
+                         output_type="optim_nlminb",debug=FALSE)) ## false convergence...
+system.time(fit3 <- test("call_purged_ps",init,sp01=0.1,sp12=1,stratum=stratifiedData2[[10]],
+                        output_type="optim_RcppDE"))
 
 
 ##
